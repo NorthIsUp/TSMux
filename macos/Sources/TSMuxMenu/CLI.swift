@@ -133,7 +133,7 @@ struct ProfileStatus: Decodable, Sendable, Identifiable {
 
   var id: String { profile }
 
-  enum Condition: Sendable {
+  enum Condition: Sendable, CaseIterable {
     case running, starting, needsLogin, stopped, failed
   }
 

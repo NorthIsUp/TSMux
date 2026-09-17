@@ -21,6 +21,10 @@ final class Controller: NSObject, NSMenuDelegate {
   private var keyboardDriven = false
   private var lastMouse = NSPoint.zero
 
+  /// What the mark last drew. A poll every 5s re-renders an identical icon,
+  /// and cross-fading that would make the menu bar shimmer for no reason.
+  private var lastIcon: (Int, Int, Bool)?
+
   func install() {
     model.onChange = { [weak self] in
       self?.updateIcon()
@@ -82,6 +86,7 @@ final class Controller: NSObject, NSMenuDelegate {
     var dimmed = false
 
     if case .firstRun = model.configState {
+      crossFadeIfChanged(button, to: (0, 0, true))
       button.image = Self.gridImage(connected: 0, total: 0)
       button.appearsDisabled = true
       button.title = ""
@@ -119,6 +124,7 @@ final class Controller: NSObject, NSMenuDelegate {
     // looking like itself exactly when the user is hunting for it; the unlit
     // dots and the count already say something needs attention.
     let image: NSImage? = Self.gridImage(connected: up, total: total)
+    crossFadeIfChanged(button, to: (up, total, dimmed))
     button.image = image
     button.appearsDisabled = dimmed
     button.toolTip = label
@@ -140,6 +146,18 @@ final class Controller: NSObject, NSMenuDelegate {
       button.title = up > 0 ? "tsmux \(up)/\(total)" : "tsmux"
     }
     assert(button.image != nil || !button.title.isEmpty)
+  }
+
+  /// A spoke lighting up is a state change worth seeing; an instant swap in
+  /// the corner of the eye reads as a glitch.
+  private func crossFadeIfChanged(_ button: NSButton, to state: (Int, Int, Bool)) {
+    defer { lastIcon = state }
+    guard let last = lastIcon, last != state else { return }
+    button.wantsLayer = true
+    let fade = CATransition()
+    fade.type = .fade
+    fade.duration = 0.2
+    button.layer?.add(fade, forKey: kCATransition)
   }
 
   private static func barImage(_ symbol: String) -> NSImage? {
@@ -292,7 +310,7 @@ final class Controller: NSObject, NSMenuDelegate {
       host.state.apply(
         isOn: p.condition == .running,
         enabled: p.condition == .running || p.prefs?.connected == false,
-        leading: Self.statusImage(symbol, color),
+        leading: Self.menuGlyph(symbol, color, pointSize: 11),
         detail: p.condition == .running ? p.uptime : label)
     }
     if let host = liveRows[Self.daemonRowKey] {
@@ -302,12 +320,20 @@ final class Controller: NSObject, NSMenuDelegate {
       host.state.apply(
         isOn: anyUp,
         enabled: running ? model.weOwnDaemon : CLI.path != nil,
-        leading: Self.statusImage(symbol, color),
+        leading: Self.menuGlyph(symbol, color, pointSize: 11),
         detail: running && !model.weOwnDaemon ? "started elsewhere" : label)
+    }
+    if let host = liveRows[Self.pacRowKey] {
+      host.state.apply(
+        isOn: model.pacApplied,
+        enabled: model.profiles.contains { $0.condition == .running },
+        leading: Self.menuGlyph("globe", nil, pointSize: 11),
+        detail: nil)
     }
   }
 
   static let daemonRowKey = "\u{0}daemon"
+  static let pacRowKey = "\u{0}pac"
 
   static func expiryTitle(_ p: ProfileStatus) -> String {
     switch p.daysUntilExpiry ?? 0 {
@@ -388,7 +414,7 @@ final class Controller: NSObject, NSMenuDelegate {
       title: "All tailnets",
       isOn: anyOn,
       enabled: running ? model.weOwnDaemon : CLI.path != nil,
-      leading: Self.statusImage(dSymbol, dColor),
+      leading: Self.menuGlyph(dSymbol, dColor, pointSize: 11),
       detail: running && !model.weOwnDaemon ? "started elsewhere" : dLabel
     ) { [weak self] on in
       self?.setAllConnected(on)
@@ -398,10 +424,20 @@ final class Controller: NSObject, NSMenuDelegate {
 
     // 4. PAC toggle. Copying the PAC URL is an Advanced-submenu job: the
     // routing toggle is the thing anyone comes here for.
-    let pac = action("Route System Traffic via tsmux", #selector(togglePAC), symbol: "globe")
-    pac.state = model.pacApplied ? .on : .off
-    pac.isEnabled = model.profiles.contains { $0.condition == .running }
-    menu.addItem(pac)
+    // A switch, not a checkmark: it is the same kind of boolean as the three
+    // rows above it. It is also the only `state` this menu ever set, and a
+    // checkmark anywhere makes AppKit reserve a state column that shifts every
+    // plain row's glyph — which the custom rows above cannot follow.
+    let (pacRow, pacHost) = NSMenuItem.toggleRow(
+      title: "Route all traffic",
+      isOn: model.pacApplied,
+      enabled: model.profiles.contains { $0.condition == .running },
+      leading: Self.menuGlyph("globe", nil, pointSize: 11)
+    ) { [weak self] _ in
+      self?.model.togglePAC()
+    }
+    liveRows[Self.pacRowKey] = pacHost
+    menu.addItem(pacRow)
 
     menu.addItem(.separator())
 
@@ -442,7 +478,7 @@ final class Controller: NSObject, NSMenuDelegate {
 
   private func advancedItem() -> NSMenuItem {
     let top = NSMenuItem(title: "Advanced", action: nil, keyEquivalent: "")
-    top.image = Self.menuIcon("wrench.and.screwdriver")
+    top.image = Self.menuGlyph("wrench.and.screwdriver")
     let sub = NSMenu()
     sub.autoenablesItems = false
     let copyPac = action("Copy PAC URL", #selector(copyPAC), symbol: "doc.on.doc")
@@ -467,7 +503,7 @@ final class Controller: NSObject, NSMenuDelegate {
       return
     }
     let root = NSMenuItem(title: "Devices (\(devices.count))", action: nil, keyEquivalent: "")
-    root.image = Self.menuIcon("laptopcomputer.and.iphone")
+    root.image = Self.menuGlyph("laptopcomputer.and.iphone")
     let menu = NSMenu()
     menu.autoenablesItems = false
 
@@ -577,7 +613,7 @@ final class Controller: NSObject, NSMenuDelegate {
       title: p.name,
       isOn: p.condition == .running,
       enabled: toggleable,
-      leading: Self.statusImage(symbol, color),
+      leading: Self.menuGlyph(symbol, color, pointSize: 11),
       detail: p.condition == .running ? p.uptime : label,
       submenu: true
     ) { [weak self] on in
@@ -668,6 +704,25 @@ final class Controller: NSObject, NSMenuDelegate {
     }
   }
 
+  /// Every status symbol resolves and, where it is coloured, draws its glyph
+  /// rather than a solid lozenge. Both failures are silent at runtime: a
+  /// typo'd name yields nil and the row loses its icon, and a one-colour
+  /// palette on a `.fill` symbol fills the glyph too. The green tick shipped
+  /// as a green disc for exactly that reason.
+  static func iconSelfCheck() -> Bool {
+    var symbols = ProfileStatus.Condition.allCases.map { appearance($0, state: "").0 }
+    symbols += [true, false].map { daemonAppearance(.ok([]), anyUp: $0).0 }
+    symbols += [UIState.starting, .down, .crashed(""), .failed(""), .cliMissing]
+      .map { daemonAppearance($0, anyUp: false).0 }
+    for symbol in symbols {
+      guard NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil else {
+        NSLog("tsmux: no SF Symbol named %@", symbol)
+        return false
+      }
+    }
+    return true
+  }
+
   /// A nil colour means "no state worth colouring": the glyph renders as a
   /// template and takes the menu's own text colour.
   static func appearance(_ c: ProfileStatus.Condition, state: String)
@@ -683,18 +738,37 @@ final class Controller: NSObject, NSMenuDelegate {
     }
   }
 
-  private static func statusImage(_ symbol: String, _ color: NSColor?) -> NSImage? {
-    var config = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+  /// Every glyph in this menu, at one size and weight. Two factories — 12pt
+  /// semibold for status, 13pt regular for everything else — is how the switch
+  /// rows ended up with visibly smaller, heavier glyphs than the rows beneath
+  /// them, in the same column.
+  ///
+  /// A state with a meaning worth colouring keeps its palette colour, which a
+  /// template image would flatten. A neutral glyph has no colour to carry, so
+  /// it goes template and picks up the menu's own text colour — the same
+  /// black-or-white AppKit gives an ordinary row, rather than a hand-picked
+  /// grey that only looks right in one appearance.
+  /// `pointSize` is optical, not nominal: a circle fills its box and inks the
+  /// full point size, while a gear or an arrow inks ~2pt less inside the same
+  /// box. The switch rows all carry circles and the rows below them all carry
+  /// line art, so matching their *ink* in a shared column means setting the
+  /// circles smaller. Measured, not guessed — 11pt of circle reads as the same
+  /// size as 13pt of gear.
+  private static func menuGlyph(
+    _ symbol: String?, _ color: NSColor? = nil, pointSize: CGFloat = 13
+  ) -> NSImage? {
+    guard let symbol else { return nil }
+    var config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
     if let color {
-      config = config.applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+      // A `.fill` symbol has a container to knock its glyph out of, and a
+      // single palette colour fills glyph and container alike — which is how
+      // the green tick rendered as a plain green disc. The second colour is
+      // the glyph.
+      let palette = symbol.hasSuffix(".fill") ? [NSColor.white, color] : [color]
+      config = config.applying(NSImage.SymbolConfiguration(paletteColors: palette))
     }
     let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
       .withSymbolConfiguration(config)
-    // A state with a meaning worth colouring keeps its palette colour, which a
-    // template image would flatten. A neutral state has no colour to carry, so
-    // it goes template and picks up the menu's own text colour — the same
-    // black-or-white every ordinary row glyph uses, rather than a hand-picked
-    // grey that only looks right in one appearance.
     image?.isTemplate = color == nil
     return image
   }
@@ -710,19 +784,8 @@ final class Controller: NSObject, NSMenuDelegate {
   ) -> NSMenuItem {
     let mi = NSMenuItem(title: title, action: sel, keyEquivalent: key)
     mi.target = self
-    mi.image = Self.menuIcon(symbol)
+    mi.image = Self.menuGlyph(symbol)
     return mi
-  }
-
-  /// Menu glyphs are template images at the system's small size, so they tint
-  /// with the menu's appearance and line up with the text baseline.
-  private static func menuIcon(_ symbol: String?) -> NSImage? {
-    guard let symbol else { return nil }
-    let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-      .withSymbolConfiguration(
-        NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
-    image?.isTemplate = true
-    return image
   }
 
   // MARK: actions

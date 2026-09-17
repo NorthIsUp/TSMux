@@ -52,7 +52,10 @@ struct MenuRow: View {
       // the row and takes any open submenu with it.
       Group {
         if let img = state.leading {
-          Image(nsImage: img).resizable().scaledToFit()
+          // Natural size, never resizable: a 16x16 frame with `scaledToFit`
+          // scales a 13pt symbol up to 16pt, and these rows sit in the same
+          // column as ordinary items that draw their image unscaled.
+          Image(nsImage: img)
         }
       }
       .frame(width: 16, height: 16)
@@ -90,8 +93,11 @@ struct MenuRow: View {
     }
     .font(.system(size: NSFont.menuFont(ofSize: 0).pointSize))
     // Matches where AppKit indents an ordinary menu item's image. Measured
-    // against the neighbouring rows — there is no public metric for it.
-    .padding(.leading, 23)
+    // against the neighbouring rows — there is no public metric for it, and a
+    // custom view gets none of AppKit's layout. Only valid while no item in
+    // the menu sets `state`: one checkmark anywhere adds a state column and
+    // moves every ordinary row's glyph ~7pt right, which this cannot follow.
+    .padding(.leading, 15.5)
     .padding(.trailing, 12)
     .frame(height: MenuRow.height)
     .frame(maxWidth: .infinity)
