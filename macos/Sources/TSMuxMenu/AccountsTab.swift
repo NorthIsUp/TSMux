@@ -46,6 +46,10 @@ struct AccountsTab: View {
   private var split: some View {
     NavigationSplitView {
       sidebar
+        // Both: the column-width modifier alone lets the split view settle
+        // well under its own minimum, which truncates every name in the list.
+        // The frame is the floor that actually holds.
+        .frame(minWidth: 200, idealWidth: 230)
         .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 260)
         // On the sidebar's content, not on the split view: there it does
         // nothing, here it takes the collapse button, the flexible space and
