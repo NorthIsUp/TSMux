@@ -396,16 +396,12 @@ final class Controller: NSObject, NSMenuDelegate {
     liveRows[Self.daemonRowKey] = allHost
     menu.addItem(allRow)
 
-    // 4. PAC toggle, 5. copy PAC
-    let anyUp = model.profiles.contains { $0.condition == .running }
+    // 4. PAC toggle. Copying the PAC URL is an Advanced-submenu job: the
+    // routing toggle is the thing anyone comes here for.
     let pac = action("Route System Traffic via tsmux", #selector(togglePAC), symbol: "globe")
     pac.state = model.pacApplied ? .on : .off
-    pac.isEnabled = anyUp
+    pac.isEnabled = model.profiles.contains { $0.condition == .running }
     menu.addItem(pac)
-
-    let copyPac = action("Copy PAC URL", #selector(copyPAC), symbol: "doc.on.doc")
-    copyPac.isEnabled = anyUp
-    menu.addItem(copyPac)
 
     menu.addItem(.separator())
 
@@ -449,6 +445,9 @@ final class Controller: NSObject, NSMenuDelegate {
     top.image = Self.menuIcon("wrench.and.screwdriver")
     let sub = NSMenu()
     sub.autoenablesItems = false
+    let copyPac = action("Copy PAC URL", #selector(copyPAC), symbol: "doc.on.doc")
+    copyPac.isEnabled = model.profiles.contains { $0.condition == .running }
+    sub.addItem(copyPac)
     sub.addItem(action("Edit config.yaml…", #selector(openConfig), symbol: "doc.text"))
     sub.addItem(action("Run Diagnostics…", #selector(runDoctor), symbol: "stethoscope"))
     top.submenu = sub
