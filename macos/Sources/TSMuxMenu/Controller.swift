@@ -762,14 +762,11 @@ final class Controller: NSObject, NSMenuDelegate {
   static func appearance(_ c: ProfileStatus.Condition, state: String)
     -> (String, NSColor?, String)
   {
-    switch c {
-    case .running: return ("checkmark.circle.fill", .systemGreen, "Connected")
-    case .starting: return ("arrow.triangle.2.circlepath", .systemBlue, "Connecting…")
-    case .needsLogin: return ("exclamationmark.triangle.fill", .systemYellow, "Needs login")
-    case .stopped:
-      return ("pause.circle", nil, state == "NoState" ? "Not started" : "Stopped")
-    case .failed: return ("xmark.octagon.fill", .systemRed, "Error")
-    }
+    // Symbol and tint come from the condition itself, so the menu and the
+    // Settings window cannot disagree. Only the label is menu-specific: a
+    // tailnet that has never run reads better as "Not started" than "Stopped".
+    let label = c == .stopped && state == "NoState" ? "Not started" : c.label
+    return (c.symbol, c.tint, label)
   }
 
   /// Every glyph in this menu, at one size and weight. Two factories — 12pt

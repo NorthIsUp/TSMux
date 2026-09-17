@@ -44,30 +44,66 @@ struct CopyableValue: View {
   }
 }
 
+/// The app's one status glyph. The menu rows draw the same symbol at the same
+/// optical size, so a tailnet looks the same in the menu bar and in Settings —
+/// which it did not when this was a plain coloured dot.
 struct StatusDot: View {
   let condition: ProfileStatus.Condition
+  /// Set when the glyph sits on a selected row's accent fill.
+  var onProminentBackground = false
 
   var body: some View {
-    Circle()
-      .fill(color)
-      .frame(width: 9, height: 9)
-      .accessibilityLabel(label)
+    Image(systemName: condition.symbol)
+      .symbolRenderingMode(condition.tint == nil ? .monochrome : .palette)
+      .foregroundStyle(glyph, container)
+      // 11pt to match the menu rows: a circle inks its full point size where
+      // line art inks ~2pt less, so the circles are set smaller to match.
+      .font(.system(size: 11))
+      .accessibilityLabel(condition.label)
   }
 
-  private var color: Color {
-    switch condition {
-    case .running: return .green
-    case .starting: return .blue
-    case .needsLogin: return .yellow
-    case .stopped: return .secondary
-    case .failed: return .red
-    }
+  /// A `.fill` symbol knocks its glyph out of its container, so one palette
+  /// colour would fill both and the tick would vanish into a solid disc.
+  private var glyph: Color {
+    guard let tint = condition.tint else { return untinted }
+    return condition.symbol.hasSuffix(".fill") ? .white : Color(tint)
   }
 
-  private var label: String { condition.label }
+  private var container: Color { condition.tint.map { Color($0) } ?? untinted }
+
+  /// An untinted glyph follows its surroundings, and on a selected row those
+  /// surroundings are solid accent rather than the window background.
+  private var untinted: Color {
+    onProminentBackground ? .white : .primary
+  }
 }
 
 extension ProfileStatus.Condition {
+  /// One vocabulary for every surface: the menu's rows, its mark's tooltip and
+  /// the Settings window all read these, so a state cannot look like one thing
+  /// in the menu and another in a window.
+  var symbol: String {
+    switch self {
+    case .running: return "checkmark.circle.fill"
+    case .starting: return "arrow.triangle.2.circlepath"
+    case .needsLogin: return "exclamationmark.triangle.fill"
+    case .stopped: return "pause.circle"
+    case .failed: return "xmark.octagon.fill"
+    }
+  }
+
+  /// nil means "no state worth colouring" — the glyph takes the surrounding
+  /// text colour instead of a hand-picked grey.
+  var tint: NSColor? {
+    switch self {
+    case .running: return .systemGreen
+    case .starting: return .systemBlue
+    case .needsLogin: return .systemYellow
+    case .stopped: return nil
+    case .failed: return .systemRed
+    }
+  }
+
   var label: String {
     switch self {
     case .running: return "Connected"
@@ -84,13 +120,16 @@ extension ProfileStatus.Condition {
 struct InitialsAvatar: View {
   let name: String
   var size: CGFloat = 26
+  /// A tinted-on-tint avatar disappears into a selected row's accent fill.
+  var onProminentBackground = false
 
   var body: some View {
     ZStack {
-      Circle().fill(Color.accentColor.opacity(0.18))
+      Circle().fill(
+        onProminentBackground ? Color.white.opacity(0.22) : Color.accentColor.opacity(0.18))
       Text(initials)
         .font(.system(size: size * 0.42, weight: .semibold))
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(onProminentBackground ? Color.white : Color.accentColor)
     }
     .frame(width: size, height: size)
     .accessibilityHidden(true)

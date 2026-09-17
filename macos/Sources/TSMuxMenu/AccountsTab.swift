@@ -43,28 +43,29 @@ struct AccountsTab: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
+  /// Deliberately not a `NavigationSplitView`: that builds the *window's*
+  /// sidebar, which runs the full height of the window and up behind the
+  /// traffic lights — over the tab bar that is supposed to contain it. This
+  /// sidebar belongs to the Accounts tab, so it stays inside the tab's content
+  /// and the tab bar spans the window as it should.
   private var split: some View {
-    NavigationSplitView {
-      sidebar
-        .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 260)
-        // On the sidebar's content, not on the split view: there it does
-        // nothing, here it takes the collapse button, the flexible space and
-        // the split separator with it, leaving the window's own tabs alone.
-        .toolbar(removing: .sidebarToggle)
-    } detail: {
-      if let p = model.selection {
-        AccountDetail(
-          model: model, profile: p, showRemove: $showRemove, showDNS: $showDNS)
-      } else {
-        Text("Select a tailnet").foregroundStyle(.secondary)
+    HStack(spacing: 0) {
+      sidebar.frame(width: 230)
+      Divider()
+      Group {
+        if let p = model.selection {
+          AccountDetail(
+            model: model, profile: p, showRemove: $showRemove, showDNS: $showDNS)
+        } else {
+          Text("Select a tailnet").foregroundStyle(.secondary)
+        }
       }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
   }
 
-  /// The List is the column's own content, never wrapped in a stack: the
-  /// sidebar material only runs up behind the traffic lights when the column
-  /// root is the list itself, and the add/remove bar rides along as a safe
-  /// area inset rather than a sibling in a VStack.
+  /// The add/remove bar rides along as a safe area inset rather than a sibling
+  /// in a VStack, so the list scrolls under it instead of beside it.
   private var sidebar: some View {
     List(selection: selectionBinding) {
       Section {
@@ -80,7 +81,16 @@ struct AccountsTab: View {
         }
       }
     }
+    // `.sidebar` for the selection, which is a tinted glass capsule that keeps
+    // the row's text legible; `.inset` fills the row with solid accent and the
+    // secondary text and the avatar drown in it.
     .listStyle(.sidebar)
+    // The style's *background* is the part we do not want: it expects the
+    // vibrant material AppKit puts behind a window's sidebar, and vibrancy
+    // needs a non-opaque window — which is what `NavigationSplitView` was
+    // taking over the whole window to get. Hidden, the column sits on the
+    // content background and only the selection styling carries over.
+    .scrollContentBackground(.hidden)
     .safeAreaInset(edge: .bottom, spacing: 0) {
       VStack(spacing: 0) {
         Divider()
@@ -124,23 +134,47 @@ struct AccountsTab: View {
   }
 
   private func row(_ p: ProfileStatus) -> some View {
+    TailnetRow(
+      profile: p,
+      showProxy: model.displayProfiles.count > 1,
+      selected: p.profile == model.selection?.profile)
+  }
+}
+
+/// A selected sidebar row is filled with solid accent. The system recolours
+/// labels that use the *default* foreground — which is why the title turns
+/// white by itself — but anything with an explicit `.foregroundStyle` keeps its
+/// own colour and drowns. `backgroundProminence` is the documented way to learn
+/// this and it reads `.standard` here, so the row is told directly instead.
+private struct TailnetRow: View {
+  let profile: ProfileStatus
+  let showProxy: Bool
+  let selected: Bool
+
+  private var prominent: Bool { selected }
+
+  var body: some View {
     HStack(spacing: 8) {
-      InitialsAvatar(name: p.name)
+      InitialsAvatar(name: profile.name, onProminentBackground: prominent)
       VStack(alignment: .leading, spacing: 1) {
-        Text(p.name).lineLimit(1)
-        Text(p.user?.loginName ?? "not signed in")
+        Text(profile.name).lineLimit(1)
+        Text(profile.user?.loginName ?? "not signed in")
           .font(.caption)
-          .foregroundStyle(.secondary)
+          .foregroundStyle(
+            prominent ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary)
+          )
           .lineLimit(1)
-        if model.displayProfiles.count > 1, let proxy = p.httpProxy,
-          let port = proxy.split(separator: ":")
-            .last
+        if showProxy, let proxy = profile.httpProxy,
+          let port = proxy.split(separator: ":").last
         {
-          Text("proxy :\(port)").font(.caption2).foregroundStyle(.tertiary)
+          Text("proxy :\(port)")
+            .font(.caption2)
+            .foregroundStyle(
+              prominent ? AnyShapeStyle(.white.opacity(0.65)) : AnyShapeStyle(.tertiary))
         }
       }
       Spacer(minLength: 4)
-      StatusDot(condition: p.condition)
+      StatusDot(condition: profile.condition, onProminentBackground: prominent)
     }
     .padding(.vertical, 2)
   }
