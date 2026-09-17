@@ -165,7 +165,10 @@ final class Controller: NSObject, NSMenuDelegate {
 
     let from = litShown
     let started = Date()
-    let duration = 0.28
+    // 280ms read as a hard cut: the mark is 18x14pt and a spoke only travels
+    // from 26% to 100% alpha, so the eye needs longer on it than a control
+    // animation would take.
+    let duration = 0.5
     let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self, weak button] timer in
       guard let self, let button else { return timer.invalidate() }
       let p = min(1, Date().timeIntervalSince(started) / duration)
@@ -335,7 +338,7 @@ final class Controller: NSObject, NSMenuDelegate {
       host.state.apply(
         isOn: p.condition == .running,
         enabled: p.condition == .running || p.prefs?.connected == false,
-        leading: Self.menuGlyph(symbol, color, pointSize: 11),
+        symbol: symbol, tint: color,
         detail: p.condition == .running ? p.uptime : label)
     }
     if let host = liveRows[Self.daemonRowKey] {
@@ -345,14 +348,14 @@ final class Controller: NSObject, NSMenuDelegate {
       host.state.apply(
         isOn: anyUp,
         enabled: running ? model.weOwnDaemon : CLI.path != nil,
-        leading: Self.menuGlyph(symbol, color, pointSize: 11),
+        symbol: symbol, tint: color,
         detail: running && !model.weOwnDaemon ? "started elsewhere" : label)
     }
     if let host = liveRows[Self.pacRowKey] {
       host.state.apply(
         isOn: model.pacApplied,
         enabled: model.profiles.contains { $0.condition == .running },
-        leading: Self.menuGlyph("globe", nil, pointSize: 11),
+        symbol: "globe", tint: nil,
         detail: nil)
     }
   }
@@ -439,7 +442,7 @@ final class Controller: NSObject, NSMenuDelegate {
       title: "All tailnets",
       isOn: anyOn,
       enabled: running ? model.weOwnDaemon : CLI.path != nil,
-      leading: Self.menuGlyph(dSymbol, dColor, pointSize: 11),
+      symbol: dSymbol, tint: dColor,
       detail: running && !model.weOwnDaemon ? "started elsewhere" : dLabel
     ) { [weak self] on in
       self?.setAllConnected(on)
@@ -457,7 +460,7 @@ final class Controller: NSObject, NSMenuDelegate {
       title: "Route all traffic",
       isOn: model.pacApplied,
       enabled: model.profiles.contains { $0.condition == .running },
-      leading: Self.menuGlyph("globe", nil, pointSize: 11)
+      symbol: "globe"
     ) { [weak self] _ in
       self?.model.togglePAC()
     }
@@ -638,7 +641,7 @@ final class Controller: NSObject, NSMenuDelegate {
       title: p.name,
       isOn: p.condition == .running,
       enabled: toggleable,
-      leading: Self.menuGlyph(symbol, color, pointSize: 11),
+      symbol: symbol, tint: color,
       detail: p.condition == .running ? p.uptime : label,
       submenu: true
     ) { [weak self] on in
@@ -779,17 +782,9 @@ final class Controller: NSObject, NSMenuDelegate {
   /// it goes template and picks up the menu's own text colour — the same
   /// black-or-white AppKit gives an ordinary row, rather than a hand-picked
   /// grey that only looks right in one appearance.
-  /// `pointSize` is optical, not nominal: a circle fills its box and inks the
-  /// full point size, while a gear or an arrow inks ~2pt less inside the same
-  /// box. The switch rows all carry circles and the rows below them all carry
-  /// line art, so matching their *ink* in a shared column means setting the
-  /// circles smaller. Measured, not guessed — 11pt of circle reads as the same
-  /// size as 13pt of gear.
-  private static func menuGlyph(
-    _ symbol: String?, _ color: NSColor? = nil, pointSize: CGFloat = 13
-  ) -> NSImage? {
+  private static func menuGlyph(_ symbol: String?, _ color: NSColor? = nil) -> NSImage? {
     guard let symbol else { return nil }
-    var config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .regular)
+    var config = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
     if let color {
       // A `.fill` symbol has a container to knock its glyph out of, and a
       // single palette colour fills glyph and container alike — which is how

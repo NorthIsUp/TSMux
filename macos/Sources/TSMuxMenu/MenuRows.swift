@@ -10,30 +10,41 @@ final class MenuRowState {
   var title: String
   var isOn: Bool
   var enabled: Bool
-  var leading: NSImage?
+  /// The SF Symbol name and its tint, rather than a rendered image: the
+  /// `replace` effect morphs one symbol into another and needs the symbol.
+  var symbol: String?
+  var tint: NSColor?
   var detail: String?
   let submenu: Bool
   var highlighted = false
 
   init(
-    title: String, isOn: Bool, enabled: Bool, leading: NSImage?, detail: String?,
-    submenu: Bool
+    title: String, isOn: Bool, enabled: Bool, symbol: String?, tint: NSColor?,
+    detail: String?, submenu: Bool
   ) {
     self.title = title
     self.isOn = isOn
     self.enabled = enabled
-    self.leading = leading
+    self.symbol = symbol
+    self.tint = tint
     self.detail = detail
     self.submenu = submenu
   }
 
   /// State only, never geometry: a re-layout while the menu is tracking drops
   /// whatever submenu is open under the pointer.
-  func apply(isOn: Bool, enabled: Bool, leading: NSImage?, detail: String?) {
-    self.isOn = isOn
-    self.enabled = enabled
-    self.leading = leading
-    self.detail = detail
+  ///
+  /// Animated here rather than at the call sites, so a poll that lands while
+  /// the menu is open morphs the glyph instead of swapping it. Construction
+  /// stays unanimated — a row appearing should not play a transition.
+  func apply(isOn: Bool, enabled: Bool, symbol: String?, tint: NSColor?, detail: String?) {
+    withAnimation(.easeInOut(duration: 0.35)) {
+      self.isOn = isOn
+      self.enabled = enabled
+      self.symbol = symbol
+      self.tint = tint
+      self.detail = detail
+    }
   }
 }
 
@@ -51,13 +62,18 @@ struct MenuRow: View {
       // pinned too, or a glyph swapped in while the menu is tracking resizes
       // the row and takes any open submenu with it.
       Group {
-        if let img = state.leading {
-          // Natural size, never resizable: a 16x16 frame with `scaledToFit`
-          // scales a 13pt symbol up to 16pt, and these rows sit in the same
-          // column as ordinary items that draw their image unscaled.
-          Image(nsImage: img)
+        if let symbol = state.symbol {
+          Image(systemName: symbol)
+            .symbolRenderingMode(state.tint == nil ? .monochrome : .palette)
+            .foregroundStyle(glyphForeground, glyphBackground)
+            .contentTransition(.symbolEffect(.replace))
         }
       }
+      // 11pt, not the 13pt the ordinary rows use: a circle inks its full point
+      // size where line art inks ~2pt less, so matching their ink means
+      // setting the circles smaller. The frame is fixed so a glyph swapped in
+      // while the menu is tracking cannot resize the row.
+      .font(.system(size: 11))
       .frame(width: 16, height: 16)
 
       Text(state.title)
@@ -116,6 +132,20 @@ struct MenuRow: View {
 
   static let height: CGFloat = 26
 
+  /// A `.fill` symbol knocks its glyph out of the container, so the pair is
+  /// (glyph, container). An untinted glyph has no state worth colouring and
+  /// follows the row's text instead.
+  private var glyphForeground: Color {
+    guard let tint = state.tint else {
+      return state.highlighted ? Color(.selectedMenuItemTextColor) : .primary
+    }
+    return (state.symbol?.hasSuffix(".fill") ?? false) ? .white : Color(tint)
+  }
+
+  private var glyphBackground: Color {
+    state.tint.map { Color($0) } ?? .primary
+  }
+
   private var toggleBinding: Binding<Bool> {
     Binding(
       get: { state.isOn },
@@ -168,14 +198,15 @@ extension NSMenuItem {
     title: String,
     isOn: Bool,
     enabled: Bool = true,
-    leading: NSImage? = nil,
+    symbol: String? = nil,
+    tint: NSColor? = nil,
     detail: String? = nil,
     submenu: Bool = false,
     onToggle: @escaping (Bool) -> Void
   ) -> (item: NSMenuItem, host: MenuRowHost) {
     let state = MenuRowState(
-      title: title, isOn: isOn, enabled: enabled, leading: leading, detail: detail,
-      submenu: submenu)
+      title: title, isOn: isOn, enabled: enabled, symbol: symbol, tint: tint,
+      detail: detail, submenu: submenu)
     let host = MenuRowHost(state: state, onToggle: onToggle)
     let mi = NSMenuItem()
     mi.view = host

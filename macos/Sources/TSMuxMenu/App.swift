@@ -25,7 +25,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationWillFinishLaunching(_ notification: Notification) {
     assert(Slug.selfCheck(), "profile-key derivation is wrong")
-    assert(Controller.iconSelfCheck(), "a status symbol does not resolve")
+    // Not an `assert`: the app ships `-c release`, where asserts are compiled
+    // out, so the check would only ever run in a build nobody launches. A
+    // missing symbol is a blank row, not a reason to refuse to start, so it
+    // logs rather than traps.
+    _ = Controller.iconSelfCheck()
     // Covers running the binary outside the .app bundle, where LSUIElement is absent.
     NSApp.setActivationPolicy(.accessory)
   }
