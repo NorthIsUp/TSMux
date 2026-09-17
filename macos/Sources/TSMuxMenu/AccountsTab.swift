@@ -46,10 +46,6 @@ struct AccountsTab: View {
   private var split: some View {
     NavigationSplitView {
       sidebar
-        // Both: the column-width modifier alone lets the split view settle
-        // well under its own minimum, which truncates every name in the list.
-        // The frame is the floor that actually holds.
-        .frame(minWidth: 200, idealWidth: 230)
         .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 260)
         // On the sidebar's content, not on the split view: there it does
         // nothing, here it takes the collapse button, the flexible space and
@@ -65,44 +61,51 @@ struct AccountsTab: View {
     }
   }
 
+  /// The List is the column's own content, never wrapped in a stack: the
+  /// sidebar material only runs up behind the traffic lights when the column
+  /// root is the list itself, and the add/remove bar rides along as a safe
+  /// area inset rather than a sibling in a VStack.
   private var sidebar: some View {
-    VStack(spacing: 0) {
-      List(selection: selectionBinding) {
-        Section {
-          ForEach(model.displayProfiles) { p in
-            row(p).tag(p.profile)
-          }
-        } header: {
-          VStack(alignment: .leading, spacing: 1) {
-            Text("Tailnets")
-            // The whole adaptation from Tailscale in one line: selection here
-            // inspects, it does not switch.
-            Text(connectedSummary).font(.caption).foregroundStyle(.secondary)
-          }
+    List(selection: selectionBinding) {
+      Section {
+        ForEach(model.displayProfiles) { p in
+          row(p).tag(p.profile)
+        }
+      } header: {
+        VStack(alignment: .leading, spacing: 1) {
+          Text("Tailnets")
+          // The whole adaptation from Tailscale in one line: selection here
+          // inspects, it does not switch.
+          Text(connectedSummary).font(.caption).foregroundStyle(.secondary)
         }
       }
-      Divider()
-      HStack(spacing: 2) {
-        Button {
-          model.pendingAdd = true
-        } label: {
-          Image(systemName: "plus")
+    }
+    .listStyle(.sidebar)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      VStack(spacing: 0) {
+        Divider()
+        HStack(spacing: 2) {
+          Button {
+            model.pendingAdd = true
+          } label: {
+            Image(systemName: "plus")
+          }
+          .help("Add a tailnet")
+          .accessibilityLabel("Add a tailnet")
+          Button {
+            showRemove = true
+          } label: {
+            Image(systemName: "minus")
+          }
+          .help("Remove the selected tailnet")
+          .accessibilityLabel("Remove the selected tailnet")
+          .disabled(model.selection == nil)
+          Spacer()
         }
-        .help("Add a tailnet")
-        .accessibilityLabel("Add a tailnet")
-        Button {
-          showRemove = true
-        } label: {
-          Image(systemName: "minus")
-        }
-        .help("Remove the selected tailnet")
-        .accessibilityLabel("Remove the selected tailnet")
-        .disabled(model.selection == nil)
-        Spacer()
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
       }
-      .buttonStyle(.borderless)
-      .padding(.horizontal, 8)
-      .padding(.vertical, 5)
     }
   }
 
