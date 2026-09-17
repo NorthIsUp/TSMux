@@ -21,9 +21,11 @@ final class Controller: NSObject, NSMenuDelegate {
   private var keyboardDriven = false
   private var lastMouse = NSPoint.zero
 
-  /// What the mark last drew. A poll every 5s re-renders an identical icon,
-  /// and cross-fading that would make the menu bar shimmer for no reason.
-  private var lastIcon: (Int, Int, Bool)?
+  /// Where the mark's lit count currently sits. Fractional mid-animation, and
+  /// the animation's own start value, so a change that lands while one is
+  /// running picks up from what is on screen rather than snapping.
+  private var litShown: CGFloat = 0
+  private var litTimer: Timer?
 
   func install() {
     model.onChange = { [weak self] in
@@ -86,8 +88,7 @@ final class Controller: NSObject, NSMenuDelegate {
     var dimmed = false
 
     if case .firstRun = model.configState {
-      crossFadeIfChanged(button, to: (0, 0, true))
-      button.image = Self.gridImage(connected: 0, total: 0)
+      animateLit(to: 0, total: 0, on: button)
       button.appearsDisabled = true
       button.title = ""
       button.toolTip = "tsmux — no tailnets set up yet"
@@ -123,9 +124,8 @@ final class Controller: NSObject, NSMenuDelegate {
     // Always the grid. Swapping in a warning symbol makes the app stop
     // looking like itself exactly when the user is hunting for it; the unlit
     // dots and the count already say something needs attention.
-    let image: NSImage? = Self.gridImage(connected: up, total: total)
-    crossFadeIfChanged(button, to: (up, total, dimmed))
-    button.image = image
+    animateLit(to: CGFloat(up), total: total, on: button)
+    let image = button.image
     button.appearsDisabled = dimmed
     button.toolTip = label
     button.setAccessibilityLabel(label)
@@ -148,16 +148,39 @@ final class Controller: NSObject, NSMenuDelegate {
     assert(button.image != nil || !button.title.isEmpty)
   }
 
-  /// A spoke lighting up is a state change worth seeing; an instant swap in
-  /// the corner of the eye reads as a glitch.
-  private func crossFadeIfChanged(_ button: NSButton, to state: (Int, Int, Bool)) {
-    defer { lastIcon = state }
-    guard let last = lastIcon, last != state else { return }
-    button.wantsLayer = true
-    let fade = CATransition()
-    fade.type = .fade
-    fade.duration = 0.2
-    button.layer?.add(fade, forKey: kCATransition)
+  /// A spoke lighting up is a state change worth seeing, and the mark counts —
+  /// so animate the count, not a dissolve between two finished images. Redraws
+  /// the mark with a fractional `lit` for the length of the animation.
+  ///
+  /// ponytail: a 60Hz timer rather than an animatable CALayer property, which
+  /// would mean replacing `button.image` with a layer-backed subview. Upgrade
+  /// if this ever needs to be interruptible or frame-synced.
+  private func animateLit(to target: CGFloat, total: Int, on button: NSButton) {
+    litTimer?.invalidate()
+    litTimer = nil
+    // Also the path for a `total`/dimmed change, where the count is unmoved
+    // but the mark still has to be redrawn.
+    button.image = Self.gridImage(lit: litShown, total: total)
+    guard litShown != target else { return }
+
+    let from = litShown
+    let started = Date()
+    let duration = 0.28
+    let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self, weak button] timer in
+      guard let self, let button else { return timer.invalidate() }
+      let p = min(1, Date().timeIntervalSince(started) / duration)
+      let eased = p < 0.5 ? 2 * p * p : 1 - pow(-2 * p + 2, 2) / 2
+      MainActor.assumeIsolated {
+        self.litShown = from + (target - from) * CGFloat(eased)
+        button.image = Self.gridImage(lit: self.litShown, total: total)
+        if p >= 1 {
+          timer.invalidate()
+          self.litTimer = nil
+        }
+      }
+    }
+    RunLoop.main.add(t, forMode: .common)
+    litTimer = t
   }
 
   private static func barImage(_ symbol: String) -> NSImage? {
@@ -174,7 +197,7 @@ final class Controller: NSObject, NSMenuDelegate {
   /// count the connected tailnets, so the mark carries the state a "2/3"
   /// badge used to. Drawn rather than an asset: it changes with the count,
   /// and a template image tints itself in both menu bar appearances.
-  static func gridImage(connected: Int, total: Int) -> NSImage {
+  static func gridImage(lit litRaw: CGFloat, total: Int) -> NSImage {
     let size = NSSize(width: 18, height: 14)
     let image = NSImage(size: size, flipped: false) { _ in
       guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
@@ -191,18 +214,20 @@ final class Controller: NSObject, NSMenuDelegate {
       for y in rows { for x in cols { slots.append((x, y)) } }
       slots.sort { a, b in a.1 == b.1 ? a.0 < b.0 : a.1 < b.1 }
       let dimAll = total == 0
-      let lit = max(0, min(connected, slots.count))
+      let lit = max(0, min(litRaw, CGFloat(slots.count)))
 
       ctx.setLineCap(.round)
       ctx.setLineJoin(.round)
       ctx.setLineWidth(1.35)
       for (i, p) in slots.enumerated() {
-        let on = !dimAll && i < lit
-        // The dot is the tailnet, the line is just its route: keep every dot
-        // legible so the mark always reads as a full mux, and let the unlit
-        // lines recede rather than disappear.
-        let lineAlpha: CGFloat = on ? 1 : 0.26
-        let dotAlpha: CGFloat = on ? 1 : 0.5
+        // Fractional, so a spoke brightens through the intermediate values
+        // instead of stepping: `lit` of 1.4 has spoke 0 full and spoke 1 at
+        // 40%. The dot is the tailnet, the line is just its route: keep every
+        // dot legible so the mark always reads as a full mux, and let the
+        // unlit lines recede rather than disappear.
+        let on = dimAll ? 0 : max(0, min(lit - CGFloat(i), 1))
+        let lineAlpha = 0.26 + 0.74 * on
+        let dotAlpha = 0.5 + 0.5 * on
         ctx.setStrokeColor(NSColor.black.withAlphaComponent(lineAlpha).cgColor)
         ctx.beginPath()
         ctx.move(to: CGPoint(x: p.0, y: p.1))
@@ -714,6 +739,12 @@ final class Controller: NSObject, NSMenuDelegate {
     symbols += [true, false].map { daemonAppearance(.ok([]), anyUp: $0).0 }
     symbols += [UIState.starting, .down, .crashed(""), .failed(""), .cliMissing]
       .map { daemonAppearance($0, anyUp: false).0 }
+    // Fractional and out-of-range lit values must still draw a mark.
+    for lit in [CGFloat(-1), 0, 1.4, 6, 99] where Self.gridImage(lit: lit, total: 2).size.width == 0
+    {
+      NSLog("tsmux: grid mark drew nothing at lit %f", lit)
+      return false
+    }
     for symbol in symbols {
       guard NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil else {
         NSLog("tsmux: no SF Symbol named %@", symbol)
