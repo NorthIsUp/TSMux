@@ -2,8 +2,7 @@ import AppKit
 import SwiftUI
 
 struct AccountsTab: View {
-  let model: AppModel
-  @Binding var showAdd: Bool
+  @Bindable var model: AppModel
 
   @State private var showRemove = false
   @State private var showDNS = false
@@ -16,7 +15,7 @@ struct AccountsTab: View {
         split
       }
     }
-    .sheet(isPresented: $showAdd) { AddTailnetSheet(model: model) }
+    .sheet(isPresented: $model.pendingAdd) { AddTailnetSheet(model: model) }
     .sheet(isPresented: $showRemove) {
       if let p = model.selection { RemoveTailnetSheet(model: model, profile: p) }
     }
@@ -37,7 +36,7 @@ struct AccountsTab: View {
       .foregroundStyle(.secondary)
       .multilineTextAlignment(.center)
       .frame(maxWidth: 360)
-      Button("Set up your first tailnet…") { showAdd = true }
+      Button("Set up your first tailnet…") { model.pendingAdd = true }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
     }
@@ -48,6 +47,10 @@ struct AccountsTab: View {
     NavigationSplitView {
       sidebar
         .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 260)
+        // On the sidebar's content, not on the split view: there it does
+        // nothing, here it takes the collapse button, the flexible space and
+        // the split separator with it, leaving the window's own tabs alone.
+        .toolbar(removing: .sidebarToggle)
     } detail: {
       if let p = model.selection {
         AccountDetail(
@@ -77,7 +80,7 @@ struct AccountsTab: View {
       Divider()
       HStack(spacing: 2) {
         Button {
-          showAdd = true
+          model.pendingAdd = true
         } label: {
           Image(systemName: "plus")
         }
@@ -312,7 +315,10 @@ struct AccountDetail: View {
       Toggle(
         "Allow incoming connections", isOn: pref(\.shieldsUp, invert: true, flag: "shields-up"))
       Toggle("Use Tailscale DNS", isOn: pref(\.acceptDNS, flag: "accept-dns"))
-      Toggle("Use Tailscale subnets", isOn: pref(\.acceptRoutes, flag: "accept-routes"))
+      Toggle(isOn: pref(\.acceptRoutes, flag: "accept-routes")) {
+        Text("Use Tailscale subnets")
+        Text("Reach private IPs behind subnet routers on this tailnet, like 10.0.0.0/24.")
+      }
       Picker("Exit node", selection: exitNodeBinding) {
         Text("None").tag("")
         ForEach(profile.exitNodeOptions ?? []) { opt in

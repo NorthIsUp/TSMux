@@ -50,6 +50,9 @@ final class AppModel {
 
   var selectedTab: SettingsTab = .accounts
   var selectedProfile: String?
+  /// Set by the menu's add-a-tailnet rows, consumed by the Accounts tab's sheet
+  /// once the Settings window is up.
+  var pendingAdd = false
   /// Bumped after any mutation so open sheets can re-read `profile list`.
   var profilesRevision = 0
 

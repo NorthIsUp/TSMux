@@ -1,9 +1,9 @@
 import AppKit
 import Foundation
 
-// AppKit NSStatusItem + NSMenu, not SwiftUI MenuBarExtra: MenuBarExtra offers no
-// menuWillOpen hook and no per-item tooltips, which this whole UI is built on.
-// The Settings window is SwiftUI; the menu is not.
+// AppKit NSStatusItem + NSMenu, not SwiftUI MenuBarExtra: MenuBarExtra has no
+// menuWillOpen hook, no per-item tooltips and no working alternates, which this
+// whole UI is built on. The Settings window is SwiftUI; the menu is not.
 
 @MainActor
 final class Controller: NSObject, NSMenuDelegate {
@@ -16,7 +16,7 @@ final class Controller: NSObject, NSMenuDelegate {
 
   /// Rows currently on screen, so a status poll can re-render them while the
   /// menu is open instead of leaving stale state under the user's cursor.
-  private var liveRows: [String: ToggleRowView] = [:]
+  private var liveRows: [String: MenuRowHost] = [:]
   private var hoverTimer: Timer?
   private var keyboardDriven = false
   private var lastMouse = NSPoint.zero
@@ -258,8 +258,8 @@ final class Controller: NSObject, NSMenuDelegate {
   func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
     guard NSApp.currentEvent?.type == .keyDown else { return }
     keyboardDriven = true
-    for row in liveRows.values {
-      row.setHighlighted(row.enclosingMenuItem === item)
+    for host in liveRows.values {
+      host.state.highlighted = host.enclosingMenuItem === item
     }
   }
 
@@ -276,31 +276,31 @@ final class Controller: NSObject, NSMenuDelegate {
       guard mouse != lastMouse else { return }
       keyboardDriven = false
     }
-    for row in liveRows.values {
-      row.setHighlighted(row.contains(screenPoint: mouse))
+    for host in liveRows.values {
+      host.state.highlighted = host.contains(screenPoint: mouse)
     }
   }
 
-  /// Re-render the rows under the cursor. The menu no longer closes when a
-  /// switch is flipped, so without this the dot and uptime keep showing the
-  /// state the tailnet was in before the click.
+  /// Re-render the rows on screen. A status poll fires while the menu is
+  /// tracking, so without this the tick and the uptime keep showing the state
+  /// the tailnet was in when the menu opened.
   private func refreshLiveRows() {
     guard !liveRows.isEmpty else { return }
     for p in model.displayProfiles {
-      guard let row = liveRows[p.profile] else { continue }
+      guard let host = liveRows[p.profile] else { continue }
       let (symbol, color, label) = Self.appearance(p.condition, state: p.state)
-      row.apply(
+      host.state.apply(
         isOn: p.condition == .running,
         enabled: p.condition == .running || p.prefs?.connected == false,
         leading: Self.statusImage(symbol, color),
         detail: p.condition == .running ? p.uptime : label)
     }
-    if let row = liveRows[Self.daemonRowKey] {
+    if let host = liveRows[Self.daemonRowKey] {
       let running = model.daemonRunning
       let anyUp = model.displayProfiles.contains { $0.condition == .running }
       let (symbol, color, label) = Self.daemonAppearance(model.ui, anyUp: anyUp)
-      row.apply(
-        isOn: model.displayProfiles.contains { $0.condition == .running },
+      host.state.apply(
+        isOn: anyUp,
         enabled: running ? model.weOwnDaemon : CLI.path != nil,
         leading: Self.statusImage(symbol, color),
         detail: running && !model.weOwnDaemon ? "started elsewhere" : label)
@@ -384,7 +384,7 @@ final class Controller: NSObject, NSMenuDelegate {
     let running = model.daemonRunning
     let anyOn = model.displayProfiles.contains { $0.condition == .running }
     let (dSymbol, dColor, dLabel) = Self.daemonAppearance(model.ui, anyUp: anyOn)
-    let allRow = NSMenuItem.toggle(
+    let (allRow, allHost) = NSMenuItem.toggleRow(
       title: "All tailnets",
       isOn: anyOn,
       enabled: running ? model.weOwnDaemon : CLI.path != nil,
@@ -393,7 +393,7 @@ final class Controller: NSObject, NSMenuDelegate {
     ) { [weak self] on in
       self?.setAllConnected(on)
     }
-    if let view = allRow.view as? ToggleRowView { liveRows[Self.daemonRowKey] = view }
+    liveRows[Self.daemonRowKey] = allHost
     menu.addItem(allRow)
 
     // 4. PAC toggle, 5. copy PAC
@@ -574,7 +574,7 @@ final class Controller: NSObject, NSMenuDelegate {
     // has actually logged in can be toggled — for the rest the row's submenu
     // is where the login lives.
     let toggleable = p.condition == .running || p.prefs?.connected == false
-    let top = NSMenuItem.toggle(
+    let (top, host) = NSMenuItem.toggleRow(
       title: p.name,
       isOn: p.condition == .running,
       enabled: toggleable,
@@ -584,7 +584,7 @@ final class Controller: NSObject, NSMenuDelegate {
     ) { [weak self] on in
       self?.setConnected(p.profile, on)
     }
-    if let view = top.view as? ToggleRowView { liveRows[p.profile] = view }
+    liveRows[p.profile] = host
     top.setAccessibilityLabel("\(p.name), \(label)")
     top.toolTip = p.error.map { "\(p.state): \($0)" } ?? p.state
 
@@ -734,18 +734,19 @@ final class Controller: NSObject, NSMenuDelegate {
   @objc private func quit() { NSApp.terminate(nil) }
 
   @objc private func openSettings() {
-    SettingsWindow.shared.show(model)
+    SettingsScene.open()
   }
 
   @objc private func addTailnet() {
     model.selectedTab = .accounts
-    SettingsWindow.shared.show(model, addTailnet: true)
+    model.pendingAdd = true
+    SettingsScene.open()
   }
 
   @objc private func openProfileSettings(_ sender: NSMenuItem) {
     model.selectedTab = .accounts
     model.selectedProfile = sender.representedObject as? String
-    SettingsWindow.shared.show(model)
+    SettingsScene.open()
   }
 
   @objc private func copyPAC() {
