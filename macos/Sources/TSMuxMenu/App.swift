@@ -114,10 +114,11 @@ struct SettingsRootView: View {
                 .tag(Route.tailnet(p.profile))
             }
           } header: {
-            // In the header, not a bar at the foot of the sidebar: these act on
-            // tailnets, and the sidebar also holds Settings and About now, so a
-            // floating bar at the bottom would not say what it applies to.
-            HStack(spacing: 2) {
+            // Add belongs to the list. Remove belongs to the tailnet, where
+            // "Remove Tailnet…" sits in its own settings and names what it will
+            // delete; a minus here would act on whatever happened to be
+            // selected.
+            HStack {
               Text("Tailnets")
               Spacer()
               Button {
@@ -125,19 +126,11 @@ struct SettingsRootView: View {
               } label: {
                 Image(systemName: "plus")
               }
+              .buttonStyle(.borderless)
+              .imageScale(.large)
               .help("Add a tailnet")
               .accessibilityLabel("Add a tailnet")
-              Button {
-                showRemove = true
-              } label: {
-                Image(systemName: "minus")
-              }
-              .help("Remove the selected tailnet")
-              .accessibilityLabel("Remove the selected tailnet")
-              .disabled(model.selectedTab != .accounts || model.selection == nil)
             }
-            .buttonStyle(.borderless)
-            .imageScale(.small)
           }
         }
         Section("App") {
@@ -146,6 +139,10 @@ struct SettingsRootView: View {
         }
       }
       .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+      // The sidebar is the navigation — collapsing it strands you with no way
+      // to reach Settings, About or another tailnet. On the column's content
+      // rather than the split view, where the modifier does nothing.
+      .toolbar(removing: .sidebarToggle)
     } detail: {
       detail
         .scrollEdgeEffectStyle(.soft, for: .all)
