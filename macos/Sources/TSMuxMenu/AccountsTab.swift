@@ -50,8 +50,10 @@ struct AccountsTab: View {
   /// and the tab bar spans the window as it should.
   private var split: some View {
     HStack(spacing: 0) {
-      sidebar.frame(width: 230)
-      Divider()
+      sidebar
+        .frame(width: 230)
+        .glassEffect(in: .rect(cornerRadius: 12))
+        .padding(10)
       Group {
         if let p = model.selection {
           AccountDetail(
@@ -112,7 +114,7 @@ struct AccountsTab: View {
           .disabled(model.selection == nil)
           Spacer()
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.glass)
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
       }
@@ -220,6 +222,7 @@ struct AccountDetail: View {
       account
     }
     .formStyle(.grouped)
+    .scrollEdgeEffectStyle(.soft, for: .all)
   }
 
   // MARK: identity
