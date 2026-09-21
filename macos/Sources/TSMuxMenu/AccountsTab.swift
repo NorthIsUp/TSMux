@@ -1,184 +1,57 @@
 import AppKit
 import SwiftUI
 
-struct AccountsTab: View {
+/// Shown in the detail pane when there is nothing to list. The sidebar hides
+/// its Tailnets section entirely rather than showing an empty one.
+struct NoTailnets: View {
   @Bindable var model: AppModel
 
-  @State private var showRemove = false
-  @State private var showDNS = false
-
   var body: some View {
-    Group {
-      if model.displayProfiles.isEmpty {
-        emptyState
-      } else {
-        split
-      }
-    }
-    .sheet(isPresented: $model.pendingAdd) { AddTailnetSheet(model: model) }
-    .sheet(isPresented: $showRemove) {
-      if let p = model.selection { RemoveTailnetSheet(model: model, profile: p) }
-    }
-    .sheet(isPresented: $showDNS) {
-      if let p = model.selection { DNSSheet(model: model, profile: p) }
-    }
-  }
-
-  private var emptyState: some View {
     VStack(spacing: 14) {
       Image(systemName: "point.3.connected.trianglepath.dotted")
         .font(.system(size: 44))
         .foregroundStyle(.secondary)
       Text("No tailnets yet").font(.title2).bold()
-      Text(
-        "tsmux runs every tailnet at once. Add your first one — you only need a name."
-      )
-      .foregroundStyle(.secondary)
-      .multilineTextAlignment(.center)
-      .frame(maxWidth: 360)
+      Text("tsmux runs every tailnet at once. Add your first one — you only need a name.")
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 360)
       Button("Set up your first tailnet…") { model.pendingAdd = true }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
         .controlSize(.large)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
-
-  /// Deliberately not a `NavigationSplitView`: that builds the *window's*
-  /// sidebar, which runs the full height of the window and up behind the
-  /// traffic lights — over the tab bar that is supposed to contain it. This
-  /// sidebar belongs to the Accounts tab, so it stays inside the tab's content
-  /// and the tab bar spans the window as it should.
-  private var split: some View {
-    HStack(spacing: 0) {
-      sidebar
-        .frame(width: 230)
-        .glassEffect(in: .rect(cornerRadius: 12))
-        .padding(10)
-      Group {
-        if let p = model.selection {
-          AccountDetail(
-            model: model, profile: p, showRemove: $showRemove, showDNS: $showDNS)
-        } else {
-          Text("Select a tailnet").foregroundStyle(.secondary)
-        }
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-  }
-
-  /// The add/remove bar rides along as a safe area inset rather than a sibling
-  /// in a VStack, so the list scrolls under it instead of beside it.
-  private var sidebar: some View {
-    List(selection: selectionBinding) {
-      Section {
-        ForEach(model.displayProfiles) { p in
-          row(p).tag(p.profile)
-        }
-      } header: {
-        VStack(alignment: .leading, spacing: 1) {
-          Text("Tailnets")
-          // The whole adaptation from Tailscale in one line: selection here
-          // inspects, it does not switch.
-          Text(connectedSummary).font(.caption).foregroundStyle(.secondary)
-        }
-      }
-    }
-    // `.sidebar` for the selection, which is a tinted glass capsule that keeps
-    // the row's text legible; `.inset` fills the row with solid accent and the
-    // secondary text and the avatar drown in it.
-    .listStyle(.sidebar)
-    // The style's *background* is the part we do not want: it expects the
-    // vibrant material AppKit puts behind a window's sidebar, and vibrancy
-    // needs a non-opaque window — which is what `NavigationSplitView` was
-    // taking over the whole window to get. Hidden, the column sits on the
-    // content background and only the selection styling carries over.
-    .scrollContentBackground(.hidden)
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      VStack(spacing: 0) {
-        Divider()
-        HStack(spacing: 2) {
-          Button {
-            model.pendingAdd = true
-          } label: {
-            Image(systemName: "plus")
-          }
-          .help("Add a tailnet")
-          .accessibilityLabel("Add a tailnet")
-          Button {
-            showRemove = true
-          } label: {
-            Image(systemName: "minus")
-          }
-          .help("Remove the selected tailnet")
-          .accessibilityLabel("Remove the selected tailnet")
-          .disabled(model.selection == nil)
-          Spacer()
-        }
-        .buttonStyle(.glass)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-      }
-    }
-  }
-
-  private var connectedSummary: String {
-    let up = model.displayProfiles.filter { $0.condition == .running }.count
-    if up == 0 { return "none connected yet" }
-    return up == model.displayProfiles.count && up > 1
-      ? "\(up) connected, all at once"
-      : "\(up) of \(model.displayProfiles.count) connected"
-  }
-
-  private var selectionBinding: Binding<String?> {
-    Binding(
-      get: { model.selection?.profile },
-      set: { model.selectedProfile = $0 })
-  }
-
-  private func row(_ p: ProfileStatus) -> some View {
-    TailnetRow(
-      profile: p,
-      showProxy: model.displayProfiles.count > 1,
-      selected: p.profile == model.selection?.profile)
-  }
 }
 
-/// A selected sidebar row is filled with solid accent. The system recolours
-/// labels that use the *default* foreground — which is why the title turns
-/// white by itself — but anything with an explicit `.foregroundStyle` keeps its
-/// own colour and drowns. `backgroundProminence` is the documented way to learn
-/// this and it reads `.standard` here, so the row is told directly instead.
-private struct TailnetRow: View {
+/// A tailnet is a network, so it gets no avatar: an initials circle is the
+/// visual language of a person, and it was decorative besides. The status glyph
+/// leads instead, which puts every sidebar row on one icon column.
+struct TailnetRow: View {
   let profile: ProfileStatus
   let showProxy: Bool
-  let selected: Bool
-
-  private var prominent: Bool { selected }
 
   var body: some View {
-    HStack(spacing: 8) {
-      InitialsAvatar(name: profile.name, onProminentBackground: prominent)
+    HStack(spacing: 9) {
+      StatusDot(condition: profile.condition)
+        .frame(width: 16)
       VStack(alignment: .leading, spacing: 1) {
         Text(profile.name).lineLimit(1)
         Text(profile.user?.loginName ?? "not signed in")
           .font(.caption)
-          .foregroundStyle(
-            prominent ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary)
-          )
+          .foregroundStyle(.secondary)
           .lineLimit(1)
         if showProxy, let proxy = profile.httpProxy,
           let port = proxy.split(separator: ":").last
         {
-          Text("proxy :\(port)")
+          Text(verbatim: "proxy :\(port)")
             .font(.caption2)
-            .foregroundStyle(
-              prominent ? AnyShapeStyle(.white.opacity(0.65)) : AnyShapeStyle(.tertiary))
+            .foregroundStyle(.tertiary)
         }
       }
       Spacer(minLength: 4)
-      StatusDot(condition: profile.condition, onProminentBackground: prominent)
     }
-    .padding(.vertical, 2)
+    .padding(.vertical, 3)
   }
 }
 

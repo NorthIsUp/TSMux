@@ -93,21 +93,120 @@ enum SettingsScene {
   }
 }
 
+/// One sidebar, not a tab bar. `NavigationSplitView` owns the window root,
+/// which is what makes the window non-opaque and gives Liquid Glass something
+/// to refract — the tab bar was forcing the sidebar to be contained, and a
+/// contained sidebar gets no material, no vibrancy and none of the system's
+/// selected-row handling. Settings and About are sidebar rows now.
 struct SettingsRootView: View {
   @Bindable var model: AppModel
 
+  @State private var showRemove = false
+  @State private var showDNS = false
+
   var body: some View {
-    TabView(selection: $model.selectedTab) {
-      AccountsTab(model: model)
-        .tabItem { Label("Accounts", systemImage: "person.2") }
-        .tag(SettingsTab.accounts)
-      GlobalSettingsTab(model: model)
-        .tabItem { Label("Settings", systemImage: "gearshape") }
-        .tag(SettingsTab.settings)
-      AboutTab()
-        .tabItem { Label("About", systemImage: "info.circle") }
-        .tag(SettingsTab.about)
+    NavigationSplitView {
+      List(selection: routeBinding) {
+        if !model.displayProfiles.isEmpty {
+          Section {
+            ForEach(model.displayProfiles) { p in
+              TailnetRow(profile: p, showProxy: model.displayProfiles.count > 1)
+                .tag(Route.tailnet(p.profile))
+            }
+          } header: {
+            // In the header, not a bar at the foot of the sidebar: these act on
+            // tailnets, and the sidebar also holds Settings and About now, so a
+            // floating bar at the bottom would not say what it applies to.
+            HStack(spacing: 2) {
+              Text("Tailnets")
+              Spacer()
+              Button {
+                model.pendingAdd = true
+              } label: {
+                Image(systemName: "plus")
+              }
+              .help("Add a tailnet")
+              .accessibilityLabel("Add a tailnet")
+              Button {
+                showRemove = true
+              } label: {
+                Image(systemName: "minus")
+              }
+              .help("Remove the selected tailnet")
+              .accessibilityLabel("Remove the selected tailnet")
+              .disabled(model.selectedTab != .accounts || model.selection == nil)
+            }
+            .buttonStyle(.borderless)
+            .imageScale(.small)
+          }
+        }
+        Section("App") {
+          Label("Settings", systemImage: "gearshape").tag(Route.settings)
+          Label("About", systemImage: "info.circle").tag(Route.about)
+        }
+      }
+      .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+    } detail: {
+      detail
+        .scrollEdgeEffectStyle(.soft, for: .all)
     }
     .frame(minWidth: 680, minHeight: 480)
+    .sheet(isPresented: $model.pendingAdd) { AddTailnetSheet(model: model) }
+    .sheet(isPresented: $showRemove) {
+      if let p = model.selection { RemoveTailnetSheet(model: model, profile: p) }
+    }
+    .sheet(isPresented: $showDNS) {
+      if let p = model.selection { DNSSheet(model: model, profile: p) }
+    }
   }
+
+  @ViewBuilder
+  private var detail: some View {
+    switch model.selectedTab {
+    case .settings:
+      GlobalSettingsTab(model: model).navigationTitle("Settings")
+    case .about:
+      AboutTab().navigationTitle("About")
+    case .accounts:
+      if model.displayProfiles.isEmpty {
+        NoTailnets(model: model)
+      } else if let p = model.selection {
+        AccountDetail(model: model, profile: p, showRemove: $showRemove, showDNS: $showDNS)
+          .navigationTitle(p.name)
+          .navigationSubtitle(p.condition.label)
+      } else {
+        Text("Select a tailnet").foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  /// The sidebar has one selection, the model has two fields — which tab and
+  /// which tailnet — and the menu bar writes both directly. Mapping here keeps
+  /// those call sites working rather than migrating them to a route.
+  private var routeBinding: Binding<Route?> {
+    Binding(
+      get: {
+        switch model.selectedTab {
+        case .accounts: model.selection.map { Route.tailnet($0.profile) }
+        case .settings: .settings
+        case .about: .about
+        }
+      },
+      set: { route in
+        switch route {
+        case .tailnet(let profile):
+          model.selectedTab = .accounts
+          model.selectedProfile = profile
+        case .settings: model.selectedTab = .settings
+        case .about: model.selectedTab = .about
+        case nil: break
+        }
+      })
+  }
+}
+
+enum Route: Hashable {
+  case tailnet(String)
+  case settings
+  case about
 }

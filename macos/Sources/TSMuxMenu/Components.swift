@@ -49,9 +49,6 @@ struct CopyableValue: View {
 /// which it did not when this was a plain coloured dot.
 struct StatusDot: View {
   let condition: ProfileStatus.Condition
-  /// Set when the glyph sits on a selected row's accent fill.
-  var onProminentBackground = false
-
   var body: some View {
     Image(systemName: condition.symbol)
       .symbolRenderingMode(condition.tint == nil ? .monochrome : .palette)
@@ -71,11 +68,9 @@ struct StatusDot: View {
 
   private var container: Color { condition.tint.map { Color($0) } ?? untinted }
 
-  /// An untinted glyph follows its surroundings, and on a selected row those
-  /// surroundings are solid accent rather than the window background.
-  private var untinted: Color {
-    onProminentBackground ? .white : .primary
-  }
+  /// An untinted glyph has no state worth colouring and follows the text
+  /// around it — including when the system recolours a selected sidebar row.
+  private var untinted: Color { .primary }
 }
 
 extension ProfileStatus.Condition {
@@ -117,30 +112,6 @@ extension ProfileStatus.Condition {
 
 /// D9: initials in a tinted circle. No image fetch for decoration in a tool
 /// whose whole point is scoped traffic.
-struct InitialsAvatar: View {
-  let name: String
-  var size: CGFloat = 26
-  /// A tinted-on-tint avatar disappears into a selected row's accent fill.
-  var onProminentBackground = false
-
-  var body: some View {
-    ZStack {
-      Circle().fill(
-        onProminentBackground ? Color.white.opacity(0.22) : Color.accentColor.opacity(0.18))
-      Text(initials)
-        .font(.system(size: size * 0.42, weight: .semibold))
-        .foregroundStyle(onProminentBackground ? Color.white : Color.accentColor)
-    }
-    .frame(width: size, height: size)
-    .accessibilityHidden(true)
-  }
-
-  private var initials: String {
-    let words = name.split(separator: " ").prefix(2)
-    let letters = words.compactMap { $0.first.map(String.init) }.joined()
-    return letters.isEmpty ? "?" : letters.uppercased()
-  }
-}
 
 /// The one treatment for every capability tsmux structurally cannot offer:
 /// Tailscale's label at full contrast, an "Unavailable" capsule where the
