@@ -114,12 +114,11 @@ struct SettingsRootView: View {
                 .tag(Route.tailnet(p.profile))
             }
           } header: {
-            // Add belongs to the list. Remove belongs to the tailnet, where
-            // "Remove Tailnet…" sits in its own settings and names what it will
-            // delete; a minus here would act on whatever happened to be
-            // selected.
+            // Add belongs to the list; remove belongs to the tailnet, where
+            // "Remove Tailnet…" names what it will delete rather than acting on
+            // whatever happens to be selected.
             HStack {
-              Text("Tailnets")
+              Text("Tailnets").font(Self.sectionHeader)
               Spacer()
               Button {
                 model.pendingAdd = true
@@ -133,9 +132,11 @@ struct SettingsRootView: View {
             }
           }
         }
-        Section("App") {
+        Section {
           Label("Settings", systemImage: "gearshape").tag(Route.settings)
           Label("About", systemImage: "info.circle").tag(Route.about)
+        } header: {
+          Text("App").font(Self.sectionHeader)
         }
       }
       .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
@@ -200,6 +201,12 @@ struct SettingsRootView: View {
         }
       })
   }
+}
+
+extension SettingsRootView {
+  /// A step up from the system's sidebar header, which is small enough that
+  /// the sections read as faint labels rather than as headings.
+  static let sectionHeader = Font.callout.weight(.semibold)
 }
 
 enum Route: Hashable {
