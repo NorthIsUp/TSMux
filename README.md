@@ -1,8 +1,23 @@
+<div align="center">
+
+<img src="docs/logo.png" alt="" width="128">
+
 # tsmux
 
-**Run every one of your Tailscale tailnets at once.** Work, a client's, your
-homelab — all connected simultaneously, with hostnames resolving to the right
-one automatically.
+**Run every one of your Tailscale tailnets at once.**
+
+### [⬇&nbsp; Download TSMux for macOS](https://github.com/NorthIsUp/tsmux/releases/latest/download/TSMux.dmg)
+
+Signed and notarized — open it and drag TSMux to Applications.<br>
+[All releases](https://github.com/NorthIsUp/tsmux/releases) ·
+[CLI install](#cli)
+
+</div>
+
+---
+
+Work, a client's, your homelab — all connected simultaneously, with hostnames
+resolving to the right one automatically.
 
 Tailscale's own client holds one tailnet at a time; switching accounts tears
 the other down. tsmux runs one userspace node per tailnet
@@ -14,9 +29,18 @@ MIT licensed.
 
 ## Install
 
-Download `TSMux-<version>-macos.zip` from
-[Releases](https://github.com/NorthIsUp/tsmux/releases), unzip, and drag
-**TSMux.app** to `/Applications`.
+[**TSMux.dmg**](https://github.com/NorthIsUp/tsmux/releases/latest/download/TSMux.dmg)
+is the whole app: the menu bar front end with the `tsmux` CLI bundled inside it,
+so the two are always the same build. It is signed with a Developer ID
+certificate and notarized by Apple, so it opens without a Gatekeeper warning.
+
+<a id="cli"></a>
+
+### CLI only
+
+Download the `tsmux` binary for your platform from
+[Releases](https://github.com/NorthIsUp/tsmux/releases), verify it against
+`checksums-sha256.txt`, then `chmod +x` it and put it on your `PATH`.
 
 The app is ad-hoc signed, not notarized, so macOS will refuse it on first
 launch. Right-click → **Open**, or:

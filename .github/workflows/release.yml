@@ -123,6 +123,10 @@ jobs:
         run: |
           mkdir -p dist
           cp "bin/TSMux-$VERSION-macos.zip" "bin/TSMux-$VERSION.dmg" dist/
+          # A second copy under a fixed name, so
+          # releases/latest/download/TSMux.dmg is a link that never goes stale.
+          # The versioned name stays for anyone pinning a release.
+          cp "bin/TSMux-$VERSION.dmg" dist/TSMux.dmg
           ls -l dist
 
       - uses: actions/upload-artifact@v4
@@ -131,6 +135,7 @@ jobs:
           path: |
             dist/TSMux-*-macos.zip
             dist/TSMux-*.dmg
+            dist/TSMux.dmg
           if-no-files-found: error
 
   release:
@@ -149,7 +154,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: |
-          sha256sum tsmux-* TSMux-*-macos.zip TSMux-*.dmg > checksums-sha256.txt
+          sha256sum tsmux-* TSMux-*-macos.zip TSMux-*.dmg TSMux.dmg > checksums-sha256.txt
           cat checksums-sha256.txt
 
       - uses: softprops/action-gh-release@v2
@@ -173,5 +178,6 @@ jobs:
             dist/tsmux-*
             dist/TSMux-*-macos.zip
             dist/TSMux-*.dmg
+            dist/TSMux.dmg
             dist/checksums-sha256.txt
           fail_on_unmatched_files: true
