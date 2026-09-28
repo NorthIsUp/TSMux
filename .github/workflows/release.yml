@@ -7,6 +7,10 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+  # A dry run: builds, signs and notarizes exactly as a release does, then stops
+  # without publishing. Without it the first exercise of the signing path would
+  # be a public release, which is a poor place to discover a missing secret.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,7 +29,16 @@ jobs:
         name: Version from tag
         env:
           TAG: ${{ github.ref_name }}
+          DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
+          # A dry run has no tag to read, so it takes VERSION at face value and
+          # skips the agreement check below that the tag exists to make.
+          if [ "$DISPATCH" = true ]; then
+            version=$(tr -d '[:space:]' < VERSION)
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "dry run of $version (not publishing)"
+            exit 0
+          fi
           version=${TAG#v}
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # The tag is authoritative, but a VERSION that disagrees means the
@@ -122,6 +135,8 @@ jobs:
 
   release:
     needs: [check, binaries, app]
+    # A dry run proves the artifacts build and notarize; only a tag publishes.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
