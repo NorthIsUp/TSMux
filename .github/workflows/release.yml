@@ -117,6 +117,13 @@ jobs:
       - name: Sign and notarize
         run: ./scripts/devid.sh
 
+      # Signed with the EdDSA key, not the Developer ID one: Sparkle verifies the
+      # update itself before installing, on top of whatever Gatekeeper does.
+      - name: Generate appcast
+        env:
+          SPARKLE_ED_KEY: ${{ secrets.SPARKLE_ED_KEY }}
+        run: ./scripts/appcast.sh
+
       - name: Collect artifacts
         env:
           VERSION: ${{ needs.check.outputs.version }}
@@ -127,6 +134,10 @@ jobs:
           # releases/latest/download/TSMux.dmg is a link that never goes stale.
           # The versioned name stays for anyone pinning a release.
           cp "bin/TSMux-$VERSION.dmg" dist/TSMux.dmg
+          # The app's SUFeedURL points at latest/download/appcast.xml, so this
+          # name is load-bearing: rename it and every installed copy stops
+          # seeing updates.
+          cp bin/appcast.xml dist/appcast.xml
           ls -l dist
 
       - uses: actions/upload-artifact@v4
@@ -136,6 +147,7 @@ jobs:
             dist/TSMux-*-macos.zip
             dist/TSMux-*.dmg
             dist/TSMux.dmg
+            dist/appcast.xml
           if-no-files-found: error
 
   release:
@@ -179,5 +191,6 @@ jobs:
             dist/TSMux-*-macos.zip
             dist/TSMux-*.dmg
             dist/TSMux.dmg
+            dist/appcast.xml
             dist/checksums-sha256.txt
           fail_on_unmatched_files: true

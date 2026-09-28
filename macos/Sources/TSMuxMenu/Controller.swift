@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Sparkle
 
 // AppKit NSStatusItem + NSMenu, not SwiftUI MenuBarExtra: MenuBarExtra has no
 // menuWillOpen hook, no per-item tooltips and no working alternates, which this
@@ -11,6 +12,11 @@ final class Controller: NSObject, NSMenuDelegate {
   private var item: NSStatusItem?
   private let menu = NSMenu()
   private var timer: Timer?
+
+  /// Sparkle. Started here rather than lazily: the updater has to be running to
+  /// do its own scheduled background checks, not only to answer the menu item.
+  private let updater = SPUStandardUpdaterController(
+    startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
   // MARK: launch
 
@@ -514,6 +520,13 @@ final class Controller: NSObject, NSMenuDelegate {
     sub.addItem(copyPac)
     sub.addItem(action("Edit config.yaml…", #selector(openConfig), symbol: "doc.text"))
     sub.addItem(action("Run Diagnostics…", #selector(runDoctor), symbol: "stethoscope"))
+    sub.addItem(.separator())
+    let update = action(
+      "Check for Updates…", #selector(checkForUpdates), symbol: "arrow.down.circle")
+    // Sparkle disables its own check while one is in flight; without
+    // autoenablesItems the menu will not ask, so mirror it here.
+    update.isEnabled = updater.updater.canCheckForUpdates
+    sub.addItem(update)
     top.submenu = sub
     return top
   }
@@ -817,6 +830,13 @@ final class Controller: NSObject, NSMenuDelegate {
   @objc private func stop() { model.stop() }
   @objc private func togglePAC() { model.togglePAC() }
   @objc private func quit() { NSApp.terminate(nil) }
+
+  /// An accessory app has no windows to come forward with, so the update panel
+  /// would open behind whatever is frontmost.
+  @objc private func checkForUpdates() {
+    NSApp.activate()
+    updater.checkForUpdates(nil)
+  }
 
   @objc private func openSettings() {
     SettingsScene.open()

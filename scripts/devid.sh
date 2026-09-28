@@ -27,10 +27,21 @@ notarize() {
     --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID"
 }
 
-# The bundled CLI is a second Mach-O and is not covered by a signature made over
-# the bundle before it — nested code signs first, or --deep --strict rejects it.
+# Nested code is not covered by a signature made over the bundle before it, so
+# it signs first — and Sparkle's helpers before the framework that contains
+# them. Notarization rejects the bundle otherwise.
 echo "==> signing (Developer ID, hardened runtime)"
-codesign --force --timestamp --options runtime --sign "$DEVID" "$APP/Contents/Resources/tsmux"
+SPK="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
+for inner in \
+  "$SPK/XPCServices/Downloader.xpc" \
+  "$SPK/XPCServices/Installer.xpc" \
+  "$SPK/Updater.app" \
+  "$SPK/Autoupdate" \
+  "$APP/Contents/Frameworks/Sparkle.framework" \
+  "$APP/Contents/Resources/tsmux"
+do
+  codesign --force --timestamp --options runtime --sign "$DEVID" "$inner"
+done
 codesign --force --timestamp --options runtime --sign "$DEVID" "$APP"
 codesign --verify --deep --strict "$APP"
 

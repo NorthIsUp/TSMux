@@ -17,7 +17,9 @@ team_dir="${TEAM_DIR:-$HOME/.appstoreconnect/clipmd}"
 : "${ASC_KEY_ID:=238ATU74S4}"
 key="$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
 
-for f in "$key" "$team_dir/devid.p12" "$team_dir/p12.pass"; do
+sparkle_key="${SPARKLE_KEY:-$HOME/.appstoreconnect/tsmux/sparkle_ed_priv}"
+
+for f in "$key" "$team_dir/devid.p12" "$team_dir/p12.pass" "$sparkle_key"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 
@@ -25,6 +27,9 @@ echo "==> setting secrets on $repo"
 gh secret set ASC_KEY_P8    --repo "$repo" < "$key"
 gh secret set P12_PASSWORD  --repo "$repo" < "$team_dir/p12.pass"
 base64 -i "$team_dir/devid.p12" | gh secret set DEVID_P12 --repo "$repo"
+# Signs every Sparkle update. Losing it means shipping a new public key in a
+# build users have to install by hand; leaking it means someone else can.
+gh secret set SPARKLE_ED_KEY --repo "$repo" < "$sparkle_key"
 
 echo "==> done; secrets now on $repo:"
 gh secret list --repo "$repo"

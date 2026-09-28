@@ -45,6 +45,15 @@ swift scripts/make-icon.swift "$ICONSET" >/dev/null
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 cp bin/tsmux "$APP/Contents/Resources/tsmux"
 
+# Sparkle ships as a binary xcframework. SwiftPM links it but does not populate
+# a bundle it did not assemble, so the framework is copied in by hand and found
+# at runtime through the -rpath set in Package.swift.
+SPARKLE="macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+[ -d "$SPARKLE" ] || { echo "no Sparkle.framework at $SPARKLE — run swift build first" >&2; exit 1; }
+mkdir -p "$APP/Contents/Frameworks"
+# -R, not -a: preserves the framework's version symlinks, which codesign needs.
+cp -R "$SPARKLE" "$APP/Contents/Frameworks/"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,6 +71,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <!-- Sparkle. The feed is a fixed asset name on the newest release, so the
+       URL never changes; SUPublicEDKey is the public half of the EdDSA pair
+       whose private half lives in the login keychain and in CI as a secret. -->
+  <key>SUFeedURL</key><string>https://github.com/NorthIsUp/tsmux/releases/latest/download/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>SEebdGvE5oDNyriWJ8nAnln9mG+X4F+2BiR5n/a3Kmw=</string>
+  <key>SUEnableAutomaticChecks</key><true/>
 </dict>
 </plist>
 PLIST
@@ -79,7 +94,18 @@ fi
 echo "==> floor: macOS $plist_floor (plist and binary agree)"
 
 echo "==> signing (ad-hoc)"
-codesign --force --sign - --timestamp=none "$APP/Contents/Resources/tsmux"
+# Inner code first, and Sparkle's helpers before the framework that holds them:
+# a signature over a bundle does not cover a nested executable signed after it.
+for inner in \
+  "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc" \
+  "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc" \
+  "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
+  "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" \
+  "$APP/Contents/Frameworks/Sparkle.framework" \
+  "$APP/Contents/Resources/tsmux"
+do
+  codesign --force --sign - --timestamp=none "$inner"
+done
 codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --deep --strict "$APP"
 
