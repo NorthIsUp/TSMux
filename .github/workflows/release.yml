@@ -86,22 +86,38 @@ jobs:
           install: true
           cache: true
 
+      # Developer ID needs no provisioning profile and no registered bundle id,
+      # so this is one certificate and one API key — see scripts/ci-signing.sh.
+      - name: Install signing material
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          DEVID_P12: ${{ secrets.DEVID_P12 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        run: ./scripts/ci-signing.sh
+
       - name: Build TSMux.app
         run: ./scripts/build-app.sh
 
-      # ditto preserves the bundle's symlinks and the ad-hoc signature; `zip` does not.
-      - name: Zip TSMux.app
+      # Signs, notarizes, staples, and builds a notarized dmg. No fallback to an
+      # unsigned artifact: a release that quietly shipped un-notarized would put
+      # the Gatekeeper warning back in front of every user.
+      - name: Sign and notarize
+        run: ./scripts/devid.sh
+
+      - name: Collect artifacts
         env:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
           mkdir -p dist
-          ditto -c -k --keepParent bin/TSMux.app "dist/TSMux-$VERSION-macos.zip"
+          cp "bin/TSMux-$VERSION-macos.zip" "bin/TSMux-$VERSION.dmg" dist/
           ls -l dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: app
-          path: dist/TSMux-*-macos.zip
+          path: |
+            dist/TSMux-*-macos.zip
+            dist/TSMux-*.dmg
           if-no-files-found: error
 
   release:
@@ -118,7 +134,7 @@ jobs:
       - name: Checksums
         working-directory: dist
         run: |
-          sha256sum tsmux-* TSMux-*-macos.zip > checksums-sha256.txt
+          sha256sum tsmux-* TSMux-*-macos.zip TSMux-*.dmg > checksums-sha256.txt
           cat checksums-sha256.txt
 
       - uses: softprops/action-gh-release@v2
@@ -134,15 +150,13 @@ jobs:
 
             ## macOS menu bar app
 
-            `TSMux-${{ needs.check.outputs.version }}-macos.zip` is **ad-hoc signed and
-            not notarized**. macOS Gatekeeper will refuse to open it on first launch.
-            Either right-click the app and choose *Open*, or clear the quarantine flag:
-
-            ```sh
-            xattr -dr com.apple.quarantine /Applications/TSMux.app
-            ```
+            Download `TSMux-${{ needs.check.outputs.version }}.dmg`, open it and drag
+            TSMux to Applications. It is signed with a Developer ID certificate and
+            notarized by Apple, so it opens normally — no right-click-Open, no
+            clearing a quarantine flag.
           files: |
             dist/tsmux-*
             dist/TSMux-*-macos.zip
+            dist/TSMux-*.dmg
             dist/checksums-sha256.txt
           fail_on_unmatched_files: true

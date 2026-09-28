@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Sign, notarize and staple TSMux.app + .dmg for release (needs the Developer ID cert)"
+set -euo pipefail
+
+./scripts/build-app.sh
+./scripts/devid.sh "$@"
