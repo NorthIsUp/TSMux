@@ -33,5 +33,10 @@ fi
 
 mv "$OUT/appcast.xml" bin/appcast.xml
 rm -rf "$OUT"
+
+# A feed that publishes but that no installed app accepts fails silently — it
+# looks exactly like having no updates. Check before it ships, not after.
+./scripts/check-appcast.sh bin/appcast.xml bin
+
 echo "==> bin/appcast.xml"
 cat bin/appcast.xml
