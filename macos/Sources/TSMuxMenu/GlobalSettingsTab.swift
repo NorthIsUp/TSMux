@@ -220,7 +220,7 @@ struct AboutTab: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .task {
       if case .success(let v) = CLI.json(VersionInfo.self, ["version"]) {
-        version = v.version ?? "unknown"
+        version = v.display
       } else {
         version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
       }

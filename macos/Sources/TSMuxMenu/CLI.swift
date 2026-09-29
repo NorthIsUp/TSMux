@@ -258,6 +258,18 @@ struct DoctorReport: Decodable, Sendable {
 
 struct VersionInfo: Decodable, Sendable {
   let version: String?
+  /// The tailscale.com the CLI was linked against, which is the thing that
+  /// actually changes between most builds.
+  let tailscale: String?
+
+  /// "0.1.0 (ts v1.102.5)". The bundle's own CFBundleShortVersionString stays a
+  /// bare semver — Sparkle and Launch Services both parse it — so the pair only
+  /// ever appears as display text.
+  var display: String {
+    let app = version ?? "—"
+    guard let ts = tailscale, !ts.isEmpty else { return app }
+    return "\(app) (ts \(ts))"
+  }
 }
 
 /// The contract's whole error surface: stderr's last line, `tsmux: ` stripped.

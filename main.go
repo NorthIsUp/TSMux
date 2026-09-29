@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -1002,11 +1003,35 @@ func portsOf(cfg *tsmux.Config) []string {
 	return out
 }
 
+// tailscaleVersion reports the tailscale.com the binary was actually linked
+// against. Read from the build info rather than injected by a build flag: a
+// flag is a second place to update and can quietly disagree with what was
+// compiled in, which is the one thing this string exists to tell you.
+func tailscaleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, dep := range info.Deps {
+		if dep.Path == "tailscale.com" {
+			return dep.Version
+		}
+	}
+	return ""
+}
+
 func cmdVersion() *cobra.Command {
 	return &cobra.Command{
 		Use: "version", Short: "Print version information",
 		Run: func(_ *cobra.Command, _ []string) {
-			emit(map[string]string{"version": version}, func() { fmt.Println(version) })
+			ts := tailscaleVersion()
+			emit(map[string]string{"version": version, "tailscale": ts}, func() {
+				if ts == "" {
+					fmt.Println(version)
+					return
+				}
+				fmt.Printf("%s (ts %s)\n", version, ts)
+			})
 		},
 	}
 }
