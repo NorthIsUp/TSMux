@@ -31,5 +31,17 @@ base64 -i "$team_dir/devid.p12" | gh secret set DEVID_P12 --repo "$repo"
 # build users have to install by hand; leaking it means someone else can.
 gh secret set SPARKLE_ED_KEY --repo "$repo" < "$sparkle_key"
 
+# The daily tailscale-update job opens its PR with this. GITHUB_TOKEN cannot be
+# used: a PR it opens does not trigger `on: pull_request`, so ci.yml would never
+# run and automerge would wait on checks that never start. A fine-grained PAT
+# with contents:write + pull-requests:write on this repo is enough.
+if [ -n "${PR_TOKEN:-}" ]; then
+  printf '%s' "$PR_TOKEN" | gh secret set PR_TOKEN --repo "$repo"
+  echo "==> set PR_TOKEN"
+else
+  gh secret list --repo "$repo" | grep -q '^PR_TOKEN' \
+    || echo "note: PR_TOKEN not set and not in env — the daily update job will fail until it is" >&2
+fi
+
 echo "==> done; secrets now on $repo:"
 gh secret list --repo "$repo"

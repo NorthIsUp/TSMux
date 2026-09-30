@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: tailscale-update
@@ -53,20 +54,37 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: Commit
+      # A PR rather than a push to main: this job runs `go build/vet/test`, but
+      # ci.yml also runs `swift build -c release`, the linters and hk. A
+      # Tailscale bump that broke the *Swift* build would sail past this job's
+      # gate and land on main. The PR makes the real CI the gate and automerge
+      # keeps it unattended.
+      #
+      # PR_TOKEN, not GITHUB_TOKEN: a PR opened with GITHUB_TOKEN does not
+      # trigger `on: pull_request` workflows, so ci.yml would never run and
+      # automerge would wait forever on checks that cannot start.
+      - name: Open a pull request
         if: steps.bump.outputs.changed == 'true'
         env:
+          GH_TOKEN: ${{ secrets.PR_TOKEN }}
           BEFORE: ${{ steps.bump.outputs.before }}
           AFTER: ${{ steps.bump.outputs.after }}
         run: |
+          test -n "$GH_TOKEN" || {
+            echo "PR_TOKEN is not set — see scripts/set-ci-secrets.sh" >&2
+            exit 1
+          }
+          branch="tailscale-update/$AFTER"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
           git add go.mod go.sum
           git commit -m "Update tailscale.com to $AFTER" -m \
-            "$BEFORE -> $AFTER, applied by the daily tailscale-update job after
-          go build, go vet and go test passed.
+            "$BEFORE -> $AFTER, applied by the daily tailscale-update job.
 
-          The version the binary is linked against is what \`tsmux version\`
-          reports as \"<app> (ts <version>)\", so this commit changes what users
-          see without the app's own version moving."
-          git push
+          The version the binary links against is what \`tsmux version\` reports
+          as \"<app> (ts <version>)\", so this changes what users see without the
+          app's own version moving."
+          git push -u origin "$branch"
+          gh pr create --fill --base main --head "$branch"
+          gh pr merge --auto --squash "$branch"
