@@ -42,13 +42,6 @@ Download the `tsmux` binary for your platform from
 [Releases](https://github.com/NorthIsUp/tsmux/releases), verify it against
 `checksums-sha256.txt`, then `chmod +x` it and put it on your `PATH`.
 
-The app is ad-hoc signed, not notarized, so macOS will refuse it on first
-launch. Right-click → **Open**, or:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/TSMux.app
-```
-
 ## Getting started
 
 1. Launch TSMux. It lives in the menu bar — the dot grid with an arrow.
