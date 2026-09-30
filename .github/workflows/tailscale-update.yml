@@ -39,10 +39,19 @@ jobs:
           if [ "$before" = "$after" ]; then
             echo "already on $after"
             echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "$before -> $after"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # Never propose a downgrade. `@latest` should only ever move forward,
+          # but people run this app: a proxy hiccup or a yanked release must not
+          # be able to walk main backwards unattended, and a downgrade landing
+          # quietly is worse than this job doing nothing for a day.
+          newest=$(printf '%s\n%s\n' "$before" "$after" | sort -V | tail -1)
+          if [ "$newest" != "$after" ]; then
+            echo "refusing to move $before -> $after, which is not forward" >&2
+            exit 1
+          fi
+          echo "$before -> $after"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
       # The gate. An update that does not build is not committed, so main is
       # never left broken by an unattended job.
