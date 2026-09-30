@@ -4,8 +4,10 @@ go 1.27.0
 
 require (
 	github.com/spf13/cobra v1.10.2
+	github.com/spf13/pflag v1.0.10
+	golang.org/x/net v0.59.0
 	gopkg.in/yaml.v3 v3.0.1
-	tailscale.com v1.102.5
+	tailscale.com v1.102.4
 )
 
 require (
@@ -32,7 +34,6 @@ require (
 	github.com/mitchellh/go-ps v1.0.0 // indirect
 	github.com/pires/go-proxyproto v0.8.1 // indirect
 	github.com/safchain/ethtool v0.3.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tailscale/certstore v0.1.1-0.20260409135935-3638fb84b77d // indirect
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
 	github.com/tailscale/hujson v0.0.0-20260302212456-ecc657c15afd // indirect
@@ -44,7 +45,6 @@ require (
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
-	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
