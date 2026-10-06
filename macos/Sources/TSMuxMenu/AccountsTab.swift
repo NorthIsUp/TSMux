@@ -346,14 +346,17 @@ private struct MachineNameRow: View {
   /// what makes the new name take effect instead of waiting for a manual restart.
   private func rename() {
     let name = draft.trimmingCharacters(in: .whitespaces)
-    let (_, err, code) = model.mutateProfiles {
-      CLI.run(["profile", "set", profile.profile, "--hostname", name])
+    let key = profile.profile
+    Task {
+      let (_, err, code) = await model.mutateProfiles {
+        CLI.run(["profile", "set", key, "--hostname", name])
+      }
+      if code != 0 {
+        error = err.isEmpty ? "Rename failed." : err
+        return
+      }
+      error = nil
+      editing = false
     }
-    if code != 0 {
-      error = err.isEmpty ? "Rename failed." : err
-      return
-    }
-    error = nil
-    editing = false
   }
 }

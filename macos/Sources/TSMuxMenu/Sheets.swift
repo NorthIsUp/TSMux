@@ -36,13 +36,15 @@ struct RemoveTailnetSheet: View {
   private func remove() {
     var args = ["profile", "rm", profile.profile]
     if purge { args.append("--purge") }
-    let outcome = model.mutateProfiles { CLI.json(RemovedProfile.self, args, timeout: 20) }
-    if case .failure(let e) = outcome {
-      Alert.show("Could not remove \(profile.name)", e.message)
-      return
-    }
+    let name = profile.name
     model.selectedProfile = nil
     dismiss()
+    Task {
+      let outcome = await model.mutateProfiles { [args] in
+        CLI.json(RemovedProfile.self, args, timeout: 20)
+      }
+      if case .failure(let e) = outcome { Alert.show("Could not remove \(name)", e.message) }
+    }
   }
 }
 
