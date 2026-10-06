@@ -16,6 +16,12 @@ import Testing
     #expect(s.devices?.count == 3)
   }
 
+  @Test func deviceApprovalIsItsOwnCondition() throws {
+    let json = #"{"profile":"work","display_name":"Work","state":"NeedsMachineAuth"}"#
+    let s = try JSONDecoder().decode(ProfileStatus.self, from: Data(json.utf8))
+    #expect(s.condition == .needsApproval)
+  }
+
   @Test func groupsPeopleBeforeTagsOnlineFirst() throws {
     let groups = deviceGroups(try #require(try fixture().first?.devices))
     #expect(groups.map(\.name) == ["user@example.com", "tag:server"])
@@ -49,5 +55,12 @@ import Testing
     #expect(Slug.key("x") == "x-1")
     #expect(Slug.bump("work") == "work-2")
     #expect(Slug.bump("work-2") == "work-3")
+  }
+
+  @Test func suggestsNameFromSignIn() {
+    #expect(Slug.suggestedName(tailnet: "askclara.com", magicDNSSuffix: nil) == "Askclara")
+    #expect(Slug.suggestedName(tailnet: "adam@gmail.com", magicDNSSuffix: nil) == "Adam")
+    #expect(Slug.suggestedName(tailnet: "", magicDNSSuffix: "tail1234.ts.net") == "Tail1234")
+    #expect(Slug.suggestedName(tailnet: nil, magicDNSSuffix: nil) == "")
   }
 }

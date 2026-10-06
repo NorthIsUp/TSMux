@@ -131,7 +131,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
   public var id: String { profile }
 
   public enum Condition: Sendable, CaseIterable {
-    case running, starting, needsLogin, stopped, failed
+    case running, starting, needsLogin, needsApproval, stopped, failed
   }
 
   public var condition: Condition {
@@ -145,6 +145,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
       // before the control server issues a link. Neither is the user's problem
       // to act on, so only an actual link means "needs login".
       return authURL?.isEmpty == false ? .needsLogin : .starting
+    case "NeedsMachineAuth": return .needsApproval
     default: return .stopped
     }
   }
@@ -299,6 +300,21 @@ public enum Slug {
       return key + "-2"
     }
     return key[..<dash] + "-\(n + 1)"
+  }
+
+  /// A display name guessed from what sign-in reported: `askclara.com` →
+  /// `Askclara`, `adam@gmail.com` → `Adam`, else the MagicDNS label.
+  public static func suggestedName(tailnet: String?, magicDNSSuffix: String?) -> String {
+    let source = [tailnet, magicDNSSuffix].compactMap { $0 }.first { !$0.isEmpty } ?? ""
+    var name = source
+    if let at = name.firstIndex(of: "@") {
+      name = String(name[..<at])
+    } else {
+      let labels = name.split(separator: ".")
+      if labels.count > 1 { name = String(labels[0]) }
+    }
+    guard let first = name.first else { return "" }
+    return first.uppercased() + name.dropFirst()
   }
 
   public static func selfCheck() -> Bool {

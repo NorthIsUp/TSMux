@@ -226,6 +226,15 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 					m.learnSuffix(n, want)
 				}
 				tick = 5 * time.Second
+			case "NeedsMachineAuth":
+				// Signed in; the tailnet wants an admin to approve the device.
+				// The login link is spent, so stop offering it.
+				n.markUp(false)
+				if announced != "" {
+					log.Printf("[%s] signed in; waiting for device approval", name)
+					announced = ""
+				}
+				n.setAuthURL("")
 			case "NoState":
 				n.markUp(false)
 				// Still loading. The backend re-registers with the stored node

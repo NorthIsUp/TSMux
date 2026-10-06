@@ -77,7 +77,11 @@ struct TailnetRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      Circle().fill(color).frame(width: 10, height: 10)
+      if tailnet.condition == .starting {
+        ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+      } else {
+        Circle().fill(color).frame(width: 10, height: 10)
+      }
       VStack(alignment: .leading) {
         Text(tailnet.name)
         Text(subtitle).font(.caption).foregroundStyle(.secondary)
@@ -89,7 +93,7 @@ struct TailnetRow: View {
     switch tailnet.condition {
     case .running: .green
     case .starting: .yellow
-    case .needsLogin: .orange
+    case .needsLogin, .needsApproval: .orange
     case .stopped: .gray
     case .failed: .red
     }
@@ -102,6 +106,7 @@ struct TailnetRow: View {
       return tailnet.uptime.map { "\(devices) · up \($0)" } ?? devices
     case .starting: return "Starting…"
     case .needsLogin: return "Sign in required"
+    case .needsApproval: return "Waiting for admin approval"
     case .stopped: return "Off"
     case .failed: return tailnet.error ?? "Failed"
     }

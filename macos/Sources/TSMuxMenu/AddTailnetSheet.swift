@@ -255,6 +255,7 @@ struct AddTailnetSheet: View {
     }
     switch p.condition {
     case .needsLogin: headline = "Almost there — waiting for a sign-in link."
+    case .needsApproval: headline = "Signed in. Waiting for a tailnet admin to approve this device."
     default: headline = "Connecting to the coordination server."
     }
     if elapsed >= 45 { headline = Self.slowCopy }

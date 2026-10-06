@@ -61,6 +61,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     let proxy = NEProxySettings()
     proxy.autoProxyConfigurationEnabled = true
     proxy.proxyAutoConfigurationJavaScript = pac
+    // With no routes claimed, iOS ignores proxy settings unless matchDomains
+    // is set; "" is a suffix of every host, and the PAC sends the rest DIRECT.
+    // https://developer.apple.com/forums/thread/822733
+    proxy.matchDomains = [""]
     settings.proxySettings = proxy
     do {
       try await setTunnelNetworkSettings(settings)
