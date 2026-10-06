@@ -161,6 +161,8 @@ func TestStatusJSONFieldNames(t *testing.T) {
 		Prefs:     &StatusPrefs{Connected: true},
 		ExitNodes: []ExitNodeOption{{ID: "n1", Name: "exit", Hostname: "exit", Online: true, Current: true}},
 		Devices:   []Device{{Name: "nas", Hostname: "nas", IPs: []string{"100.64.0.2"}, OS: "linux", Owner: "a@b.c", Tags: []string{"tag:srv"}, Online: true, ExitNode: true}},
+		TailnetLock: &TailnetLock{Enabled: true, LockedOut: true, NodeKey: "nodekey:1",
+			PublicKey: "tlpub:2", SignCommand: "tailscale lock sign nodekey:1 tlpub:2"},
 	}
 	var got map[string]any
 	b, err := json.Marshal(st)
@@ -173,7 +175,9 @@ func TestStatusJSONFieldNames(t *testing.T) {
 	wantKeys(t, "status", got, "profile", "display_name", "state", "self", "device_name",
 		"ips", "peers", "auth_url", "suffixes", "http_proxy", "socks5_proxy", "error",
 		"tailnet", "magic_dns_suffix", "suffix_conflict", "user", "key_expiry", "health",
-		"connected_since", "admin_url", "prefs", "exit_node_options", "devices")
+		"connected_since", "admin_url", "prefs", "exit_node_options", "devices", "tailnet_lock")
+	wantKeys(t, "tailnet_lock", got["tailnet_lock"], "enabled", "signed", "locked_out",
+		"node_key", "public_key", "sign_command")
 	wantKeys(t, "user", got["user"], "login_name", "display_name", "avatar_url")
 	wantKeys(t, "prefs", got["prefs"], "connected", "accept_routes", "accept_dns",
 		"shields_up", "exit_node", "exit_node_allow_lan")

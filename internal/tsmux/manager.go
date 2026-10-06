@@ -511,6 +511,40 @@ type Status struct {
 	Prefs          *StatusPrefs     `json:"prefs,omitempty"`
 	ExitNodes      []ExitNodeOption `json:"exit_node_options,omitempty"`
 	Devices        []Device         `json:"devices,omitempty"`
+	TailnetLock    *TailnetLock     `json:"tailnet_lock,omitempty"`
+}
+
+// TailnetLock is this node's standing under tailnet lock. A locked-out node
+// still reports Running, just with no peers, so the UI needs this to tell the
+// two apart and to show the keys an admin signs. Public keys only.
+type TailnetLock struct {
+	Enabled   bool   `json:"enabled"`
+	Signed    bool   `json:"signed"`
+	LockedOut bool   `json:"locked_out"`
+	NodeKey   string `json:"node_key,omitempty"`
+	PublicKey string `json:"public_key,omitempty"`
+	// SignCommand is what an admin runs on a node with a trusted key.
+	SignCommand string `json:"sign_command,omitempty"`
+}
+
+// tailnetLockOf mirrors `tailscale lock status`: locked out means lock is on,
+// this node has both keys, and its node key carries no valid signature.
+func tailnetLockOf(st *ipnstate.TailnetLockStatus) *TailnetLock {
+	if st == nil {
+		return nil
+	}
+	tl := &TailnetLock{Enabled: st.Enabled, Signed: st.NodeKeySigned}
+	if !st.PublicKey.IsZero() {
+		tl.PublicKey = st.PublicKey.CLIString()
+	}
+	if st.NodeKey != nil && !st.NodeKey.IsZero() {
+		tl.NodeKey = st.NodeKey.String()
+	}
+	if st.Enabled && tl.NodeKey != "" && tl.PublicKey != "" && !st.NodeKeySigned {
+		tl.LockedOut = true
+		tl.SignCommand = fmt.Sprintf("tailscale lock sign %s %s", tl.NodeKey, tl.PublicKey)
+	}
+	return tl
 }
 
 // Device is one peer in the tailnet, for the GUI's device list. Owner and
@@ -666,6 +700,12 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 		}
 	} else if s.Err == "" {
 		s.Err = err.Error()
+	}
+	// Bounded so a slow tka read can't stall the whole status poll.
+	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if tl, err := lc.TailnetLockStatus(lctx); err == nil {
+		s.TailnetLock = tailnetLockOf(tl)
 	}
 	return s
 }

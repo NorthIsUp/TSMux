@@ -214,6 +214,9 @@ func cmdStatus() *cobra.Command {
 					if s.AuthURL != "" {
 						note = "login: " + s.AuthURL
 					}
+					if s.TailnetLock != nil && s.TailnetLock.LockedOut {
+						note = "locked out, an admin runs: " + s.TailnetLock.SignCommand
+					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
 						s.Profile, s.State, note, s.Peers, s.HTTPProxy, strings.Join(s.Suffixes, " "))
 				}

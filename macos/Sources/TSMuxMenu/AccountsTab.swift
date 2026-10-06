@@ -91,6 +91,9 @@ struct AccountDetail: View {
       } else {
         identity
       }
+      if let lock = profile.tailnetLock, lock.lockedOut {
+        lockedOut(lock)
+      }
       routing
       connection
       account
@@ -145,6 +148,31 @@ struct AccountDetail: View {
               Button("Renew…") { openURLString(admin) }
             }
           }
+        }
+      }
+    }
+  }
+
+  // MARK: tailnet lock
+
+  @ViewBuilder private func lockedOut(_ lock: TailnetLock) -> some View {
+    Section("Tailnet Lock") {
+      Label(
+        "Signed in, but tailnet lock hides every device until an admin signs this one.",
+        systemImage: "lock.circle.fill"
+      )
+      .foregroundStyle(.orange)
+      if let k = lock.nodeKey {
+        LabeledContent("Node key") { CopyableValue(value: k, monospaced: true) }
+      }
+      if let k = lock.publicKey {
+        LabeledContent("Tailnet-lock key") { CopyableValue(value: k, monospaced: true) }
+      }
+      if let cmd = lock.signCommand {
+        VStack(alignment: .leading, spacing: 4) {
+          Text("On a device with a trusted tailnet-lock key, run:")
+            .font(.footnote).foregroundStyle(.secondary)
+          CopyableValue(value: cmd, monospaced: true)
         }
       }
     }

@@ -1,5 +1,6 @@
 import SwiftUI
 import TSMuxKit
+import UIKit
 
 struct TailnetView: View {
   let profile: String
@@ -31,6 +32,10 @@ struct TailnetView: View {
         } footer: {
           Text("This tailnet connects on its own once you've signed in.")
         }
+      }
+
+      if let lock = t.tailnetLock, lock.lockedOut {
+        lockedOut(lock)
       }
 
       Section {
@@ -76,7 +81,7 @@ struct TailnetView: View {
         if let raw = t.adminURL, let url = URL(string: raw) {
           Link("Admin console", destination: url)
         }
-        if t.condition == .running {
+        if t.isUp {
           Button("Log out") { Task { await model.logout(profile) } }
         }
         Button("Remove tailnet", role: .destructive) { confirmRemove = true }
@@ -95,6 +100,36 @@ struct TailnetView: View {
       }
     } message: {
       Text("This device leaves the tailnet and its sign-in is deleted.")
+    }
+  }
+
+  private func lockedOut(_ lock: TailnetLock) -> some View {
+    Section {
+      if let k = lock.nodeKey { keyRow("Node key", k) }
+      if let k = lock.publicKey { keyRow("Tailnet-lock key", k) }
+      if let cmd = lock.signCommand { keyRow("Sign command", cmd) }
+    } header: {
+      Label("Needs tailnet-lock signature", systemImage: "lock.circle.fill")
+        .foregroundStyle(.orange)
+    } footer: {
+      Text(
+        "Signed in, but tailnet lock hides every device until an admin runs the sign "
+          + "command on a device with a trusted tailnet-lock key.")
+    }
+  }
+
+  private func keyRow(_ title: String, _ value: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title).font(.caption).foregroundStyle(.secondary)
+      HStack {
+        Text(value)
+          .font(.system(.footnote, design: .monospaced))
+          .textSelection(.enabled)
+        Spacer()
+        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = value }
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderless)
+      }
     }
   }
 
