@@ -12,9 +12,11 @@ import (
 // configured tunnels. A nil local skips the PAC/API listener, for hosts that
 // reach the API in process. The returned func closes them all; on error,
 // whatever was already opened is closed before returning.
-func Serve(cfg *Config, m *Manager, local http.Handler) (closeAll func(), err error) {
+func Serve(cfg *Config, m *Manager, local http.Handler) (_ func(), err error) {
 	var closers []func()
-	closeAll = func() {
+	// Not the named result: an error return sets that to nil before the
+	// deferred cleanup below gets to call it.
+	closeAll := func() {
 		for _, f := range closers {
 			f()
 		}

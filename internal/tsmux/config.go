@@ -34,9 +34,46 @@ type Config struct {
 
 	// ponytail: one config-wide RWMutex; split it if dial rates ever notice.
 	// Guards the mutable part of a loaded config: the suffix lists, which the
-	// daemon appends to when it learns a tailnet's MagicDNS suffix, and each
-	// profile's learned split-DNS domains and subnet routes.
+	// daemon appends to when it learns a tailnet's MagicDNS suffix, each
+	// profile's learned split-DNS domains and subnet routes, and exit.
 	mu sync.RWMutex
+
+	// exit is live tailnet state, not configuration: the daemon sets it from
+	// the nodes' prefs and it is never saved.
+	exit ExitRoute
+}
+
+// ExitRoute names the profile whose exit node carries public traffic. A host
+// has one default route, so at most one exit node can be in use at a time.
+type ExitRoute struct {
+	Profile  string
+	AllowLAN bool
+}
+
+// SetExitRoute reports whether the route changed.
+func (c *Config) SetExitRoute(r ExitRoute) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.exit == r {
+		return false
+	}
+	c.exit = r
+	return true
+}
+
+func (c *Config) ExitRoute() ExitRoute {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.exit
+}
+
+// exitProfileLocked is the exit route's profile, or nil when there is none or
+// it names a profile this config no longer has. Caller holds mu.
+func (c *Config) exitProfileLocked() *Profile {
+	if c.exit.Profile == "" {
+		return nil
+	}
+	return c.Profiles[c.exit.Profile]
 }
 
 type Router struct {

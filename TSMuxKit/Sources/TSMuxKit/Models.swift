@@ -118,6 +118,9 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
   public let healthMessages: [String]?
   public let adminURL: String?
   public let prefs: ProfilePrefs?
+  /// The one profile whose exit node public traffic uses; the same on every
+  /// status, since a host has a single default route.
+  public let exitProfile: String?
   public let exitNodeOptions: [ExitNodeOption]?
   public let devices: [Device]?
   public let tailnetLock: TailnetLock?
@@ -144,6 +147,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
     case healthMessages = "health"
     case adminURL = "admin_url"
     case prefs
+    case exitProfile = "exit_profile"
     case exitNodeOptions = "exit_node_options"
     case devices
     case tailnetLock = "tailnet_lock"
@@ -221,7 +225,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
       socks5Proxy: "127.0.0.1:\(p.socks5ProxyPort)", error: nil,
       tailnet: nil, magicDNSSuffix: nil, suffixConflict: nil, user: nil,
       keyExpiry: nil, connectedSince: nil, healthMessages: nil, adminURL: nil, prefs: nil,
-      exitNodeOptions: nil, devices: nil, tailnetLock: nil)
+      exitProfile: nil, exitNodeOptions: nil, devices: nil, tailnetLock: nil)
   }
 
   /// `self` keeps the wire's trailing dot; nothing user-facing wants it.
@@ -242,6 +246,15 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
   public var daysUntilExpiry: Int? {
     guard isUp, let d = expiryDate else { return nil }
     return Calendar.current.dateComponents([.day], from: Date(), to: d).day
+  }
+
+  /// The tailnet whose exit node is used instead of the one picked here, or
+  /// nil when this pick is the one in use (or nothing is picked).
+  public func exitNodeOverride(among all: [ProfileStatus]) -> String? {
+    guard let picked = prefs?.exitNode, !picked.isEmpty,
+      let winner = exitProfile, !winner.isEmpty, winner != profile
+    else { return nil }
+    return all.first { $0.profile == winner }?.name ?? winner
   }
 
   /// Suffixes beyond the one learned from the tailnet itself.

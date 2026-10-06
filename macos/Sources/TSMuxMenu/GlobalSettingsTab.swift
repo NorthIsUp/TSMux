@@ -163,7 +163,8 @@ struct GlobalSettingsTab: View {
       .map { p in
         let id = p.prefs?.exitNode ?? ""
         let name = p.exitNodeOptions?.first { $0.id == id }?.hostname ?? id
-        return "\(p.name) → \(name)"
+        let unused = p.exitNodeOverride(among: model.profiles) == nil ? "" : " (not in use)"
+        return "\(p.name) → \(name)\(unused)"
       }
       .joined(separator: " · ")
   }

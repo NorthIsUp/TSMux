@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,9 @@ import (
 
 // PAC renders a proxy auto-config that sends each tailnet's names to that
 // profile's own proxy port. Browsers then reach every tailnet at once, with
-// no system-wide interception of ordinary traffic.
+// no system-wide interception of ordinary traffic — unless an exit node is in
+// use, in which case everything else goes to that profile's proxy, whose
+// dials follow the node's default route out through the exit node.
 func (c *Config) PAC() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -33,28 +36,55 @@ func (c *Config) PAC() string {
 	// PAC files are real JavaScript, so test for a literal address directly
 	// rather than letting isInNet() trigger a DNS lookup on every domain.
 	b.WriteString("  var tsmuxIsIP = /^[0-9]{1,3}(\\.[0-9]{1,3}){3}$/.test(host);\n")
+	// isPlainHostName is true of an IPv6 literal, which has no dots; some
+	// browsers keep its brackets.
+	b.WriteString("  var tsmuxIP6 = host.indexOf(\":\") >= 0 ? host.replace(/^\\[|\\]$/g, \"\") : \"\";\n")
 
-	proxy := func(p *Profile) string {
-		return fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
-	}
 	for _, r := range c.domainRulesLocked() {
 		apex := strings.TrimPrefix(r.suffix, ".")
 		b.WriteString(fmt.Sprintf("  if (dnsDomainIs(host, %q) || host === %q) return %q; // %s %s\n",
-			r.suffix, apex, proxy(r.profile), r.profile.Name, r.kind))
+			r.suffix, apex, pacProxy(r.profile), r.profile.Name, r.kind))
 	}
 	for _, r := range c.ipRulesLocked() {
 		if ip, mask, ok := cidrToPAC(r.pfx.String()); ok {
 			b.WriteString(fmt.Sprintf("  if (tsmuxIsIP && isInNet(host, %q, %q)) return %q; // %s %s\n",
-				ip, mask, proxy(r.profile), r.profile.Name, r.kind))
+				ip, mask, pacProxy(r.profile), r.profile.Name, r.kind))
 		}
 	}
 	for _, p := range c.Ordered() {
 		if p.MatchRoot {
-			b.WriteString(fmt.Sprintf("  if (isPlainHostName(host)) return %q; // %s match_root\n", proxy(p), p.Name))
+			b.WriteString(fmt.Sprintf("  if (isPlainHostName(host) && !tsmuxIP6) return %q; // %s match_root\n", pacProxy(p), p.Name))
 		}
 	}
-	b.WriteString("  return \"DIRECT\";\n}\n")
+	exit := c.exitProfileLocked()
+	if exit == nil {
+		b.WriteString("  return \"DIRECT\";\n}\n")
+		return b.String()
+	}
+	// Mirrors exitCarriesIP and exitCarriesName.
+	b.WriteString("  if (/^(::1?$|::ffff:|fe[89ab][0-9a-f]:|fd7a:115c:a1e0:)/.test(tsmuxIP6)) return \"DIRECT\";\n")
+	writeIPv4Direct(&b, exitNever)
+	if c.exit.AllowLAN {
+		// Tailscale's "allow local network access": the LAN stays reachable
+		// directly while the exit node carries everything else.
+		b.WriteString("  if (isPlainHostName(host) && !tsmuxIP6) return \"DIRECT\";\n")
+		b.WriteString("  if (/^f[cd][0-9a-f]{2}:/.test(tsmuxIP6)) return \"DIRECT\";\n")
+		writeIPv4Direct(&b, exitLAN)
+	}
+	b.WriteString(fmt.Sprintf("  return %q; // %s exit node\n}\n", pacProxy(exit), exit.Name))
 	return b.String()
+}
+
+func writeIPv4Direct(b *strings.Builder, pfxs []netip.Prefix) {
+	for _, p := range pfxs {
+		if ip, mask, ok := cidrToPAC(p.String()); ok {
+			fmt.Fprintf(b, "  if (tsmuxIsIP && isInNet(host, %q, %q)) return \"DIRECT\";\n", ip, mask)
+		}
+	}
+}
+
+func pacProxy(p *Profile) string {
+	return fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
 }
 
 func cidrToPAC(cidr string) (ip, mask string, ok bool) {

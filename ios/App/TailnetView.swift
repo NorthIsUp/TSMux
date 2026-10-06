@@ -63,6 +63,13 @@ struct TailnetView: View {
           toggle("Use tailnet DNS", prefs.acceptDNS) { $0.acceptDNS = $1 }
           toggle("Block incoming connections", prefs.shieldsUp) { $0.shieldsUp = $1 }
           exitNodePicker(t, prefs)
+          if let other = t.exitNodeOverride(among: model.tailnets) {
+            Text(
+              "Not in use: public traffic goes through \(other)'s exit node. Only one can be active."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+          }
           if !prefs.exitNode.isEmpty {
             toggle("Allow local network access", prefs.exitNodeAllowLAN) {
               $0.exitNodeAllowLAN = $1

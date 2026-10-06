@@ -92,3 +92,49 @@ func TestRouteConcurrentSuffixLearn(t *testing.T) {
 	}
 	<-done
 }
+
+func TestRouteExitNodeFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		exit      ExitRoute
+		host      string
+		want      string // "" means refused
+		wantMatch string
+	}{
+		{"public name, no exit node", ExitRoute{}, "example.com", "", ""},
+		{"public ip, no exit node", ExitRoute{}, "1.1.1.1", "", ""},
+		{"public name via exit", ExitRoute{Profile: "home"}, "example.com", "home", "fallback to home exit node"},
+		{"public ip via exit", ExitRoute{Profile: "home"}, "1.1.1.1:443", "home", "ip literal to home exit node"},
+		{"claimed suffix beats exit", ExitRoute{Profile: "home"}, "box.work.ts.net", "work", "suffix .work.ts.net"},
+		{"ip_route beats exit", ExitRoute{Profile: "home"}, "100.64.1.5", "work", "ip_route 100.64.0.0/16"},
+		{"exit profile gone", ExitRoute{Profile: "gone"}, "example.com", "", ""},
+		{"loopback stays off the exit node", ExitRoute{Profile: "home"}, "127.0.0.1:8080", "", ""},
+		{"ipv6 loopback stays off the exit node", ExitRoute{Profile: "home"}, "[::1]:3000", "", ""},
+		{"localhost stays off the exit node", ExitRoute{Profile: "home"}, "localhost:3000", "work", "match_root"},
+		{"localhost.local stays off the exit node", ExitRoute{Profile: "home"}, "localhost.local", "", ""},
+		{"mdns stays off the exit node", ExitRoute{Profile: "home"}, "printer.local", "", ""},
+		{"unclaimed tailscale ip stays off", ExitRoute{Profile: "home"}, "100.100.1.1", "", ""},
+		{"mapped v4 stays off", ExitRoute{Profile: "home"}, "::ffff:127.0.0.1", "", ""},
+		{"lan via exit", ExitRoute{Profile: "home"}, "192.168.1.1", "home", "ip literal to home exit node"},
+		{"lan kept off with allow LAN", ExitRoute{Profile: "home", AllowLAN: true}, "192.168.1.1", "", ""},
+		{"public v6 via exit", ExitRoute{Profile: "home"}, "[2606:4700::1111]:443", "home", "ip literal to home exit node"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := cfg(t)
+			c.SetExitRoute(tc.exit)
+			m, err := c.Route(tc.host)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("expected refusal, got %s (%s)", m.Profile.Name, m.Reason)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Profile.Name != tc.want || m.Reason != tc.wantMatch {
+				t.Errorf("got %s (%s), want %s (%s)", m.Profile.Name, m.Reason, tc.want, tc.wantMatch)
+			}
+		})
+	}
+}
