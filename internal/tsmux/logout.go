@@ -18,6 +18,8 @@ import (
 // offline control server must not make a profile impossible to delete.
 const LogoutTimeout = 15 * time.Second
 
+var ErrStateDirLocked = errors.New("another tsmux is already running for this profile")
+
 // HasCredentials reports whether a state dir holds a node identity worth
 // logging out. tsnet keeps it in this one file.
 func HasCredentials(dir string) bool {
@@ -28,12 +30,16 @@ func HasCredentials(dir string) bool {
 // PurgeState logs a profile's node out on the control server, then deletes its
 // state dir. Deleting the keys alone leaves the device registered with keys
 // that are still valid. A failed logout is a warning, not an error: the user
-// asked for the profile to be gone.
+// asked for the profile to be gone. A dir another node holds is the exception:
+// deleting it would pull the state out from under a live node.
 func PurgeState(ctx context.Context, dir string, logout func(context.Context) error) (warning string, err error) {
 	if HasCredentials(dir) {
 		lctx, cancel := context.WithTimeout(ctx, LogoutTimeout)
 		lerr := logout(lctx)
 		cancel()
+		if errors.Is(lerr, ErrStateDirLocked) {
+			return "", lerr
+		}
 		if lerr != nil {
 			warning = fmt.Sprintf("could not log out on the control server (%v); "+
 				"the device may still be listed in the admin console", lerr)
@@ -96,7 +102,7 @@ func RedactURL(raw string) string {
 	if err != nil || u.Host == "" {
 		return "…"
 	}
-	if (u.Path == "" || u.Path == "/") && u.RawQuery == "" && u.Fragment == "" {
+	if (u.Path == "" || u.Path == "/") && u.RawQuery == "" && u.Fragment == "" && u.User == nil {
 		return raw
 	}
 	return u.Scheme + "://" + u.Host + "/…"

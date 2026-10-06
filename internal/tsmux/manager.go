@@ -776,7 +776,7 @@ func lockStateDir(dir string) (*os.File, error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("another tsmux is already running for this profile (state dir %s)", dir)
+		return nil, fmt.Errorf("%w (state dir %s)", ErrStateDirLocked, dir)
 	}
 	return f, nil
 }

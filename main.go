@@ -354,13 +354,9 @@ func cmdProfile() *cobra.Command {
 			}
 			dir := cfg.StateDir(args[0])
 			p := cfg.Profiles[args[0]]
-			delete(cfg.Profiles, args[0])
-			if err := cfg.Normalize(); err != nil {
-				return err
-			}
-			if err := cfg.Save(cfg.Path()); err != nil {
-				return err
-			}
+			// Purge before saving: a purge cut short (a GUI timeout, a locked
+			// dir) then leaves the profile in the config to retry, not orphaned
+			// credentials nothing points at.
 			var warning string
 			if purge {
 				warning, err = tsmux.PurgeState(cmd.Context(), dir, func(ctx context.Context) error {
@@ -370,16 +366,25 @@ func cmdProfile() *cobra.Command {
 					return err
 				}
 			}
+			delete(cfg.Profiles, args[0])
+			if err := cfg.Normalize(); err != nil {
+				return err
+			}
+			if err := cfg.Save(cfg.Path()); err != nil {
+				return err
+			}
 			out := map[string]any{"removed": args[0], "state_dir": dir, "purged": purge}
 			if warning != "" {
 				out["warning"] = warning
 			}
 			emit(out, func() {
+				if purge && warning != "" {
+					fmt.Printf("removed %s (state dir %s deleted)\n", args[0], dir)
+					fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+					return
+				}
 				if purge {
 					fmt.Printf("removed %s (logged out, state dir %s deleted)\n", args[0], dir)
-					if warning != "" {
-						fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
-					}
 					return
 				}
 				fmt.Printf("removed %s; its login is still saved in %s and the device stays registered (use --purge to log out and delete it)\n", args[0], dir)

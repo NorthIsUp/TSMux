@@ -466,7 +466,9 @@ final class AppModel {
 
   @discardableResult
   func logout(_ profile: String) -> String? {
-    switch CLI.json(ProfileStatus.self, ["profile", "logout", profile], timeout: 20) {
+    // With the daemon down this logs out from a short-lived node, which can
+    // spend the full 15s logout timeout on an unreachable control server.
+    switch CLI.json(ProfileStatus.self, ["profile", "logout", profile], timeout: 40) {
     case .success(let fresh):
       replace(fresh)
       return nil

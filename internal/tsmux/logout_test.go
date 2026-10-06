@@ -18,6 +18,7 @@ func TestRedactURL(t *testing.T) {
 		{"query secret", "https://login.example.com/?code=secret", "https://login.example.com/…"},
 		{"bare host kept", "https://controlplane.tailscale.com", "https://controlplane.tailscale.com"},
 		{"root path kept", "https://controlplane.tailscale.com/", "https://controlplane.tailscale.com/"},
+		{"userinfo dropped", "https://u:pw@hs.example/", "https://hs.example/…"},
 		{"not a url", "nonsense", "…"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,5 +123,28 @@ func TestLogoutStoppedRefusesLockedDir(t *testing.T) {
 	defer lock.Close()
 	if err := LogoutStopped(context.Background(), &Profile{Hostname: "x"}, dir); err == nil {
 		t.Fatal("LogoutStopped started a node on a locked state dir")
+	}
+}
+
+// A daemon that has not let go of the dir yet (still exiting, or a second
+// tsmux) must not have its state deleted underneath it.
+func TestPurgeStateKeepsLockedDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "tailscaled.state"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := lockStateDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	_, err = PurgeState(context.Background(), dir, func(ctx context.Context) error {
+		return LogoutStopped(ctx, &Profile{Hostname: "x"}, dir)
+	})
+	if !errors.Is(err, ErrStateDirLocked) {
+		t.Errorf("PurgeState err = %v, want ErrStateDirLocked", err)
+	}
+	if !HasCredentials(dir) {
+		t.Error("PurgeState deleted a locked state dir")
 	}
 }
