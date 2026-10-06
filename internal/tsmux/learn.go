@@ -57,7 +57,7 @@ func learnFromNetmap(nm *netmap.NetworkMap, acceptDNS, acceptRoutes bool) (domai
 		for k := range nm.DNS.Routes {
 			d := normalizeSuffix(k)
 			switch {
-			case d == "" || d == ".":
+			case !isDomain(d):
 			case strings.HasSuffix(d, ".arpa"):
 			// The MagicDNS suffix is learned separately and persisted. A
 			// parent of it ("ts.net") would swallow every other tailnet.
@@ -81,6 +81,23 @@ func learnFromNetmap(nm *netmap.NetworkMap, acceptDNS, acceptRoutes bool) (domai
 		routes = slices.Compact(routes)
 	}
 	return domains, routes
+}
+
+// isDomain keeps the PAC to hostname characters: these keys come from the
+// control server, not the user, and are written into JavaScript.
+func isDomain(d string) bool {
+	labels := strings.Split(strings.TrimPrefix(d, "."), ".")
+	for _, l := range labels {
+		if l == "" || len(l) > 63 {
+			return false
+		}
+		for _, ch := range l {
+			if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func comparePrefix(a, b netip.Prefix) int {
@@ -125,22 +142,51 @@ func (c *Config) setLearned(name string, domains []string, routes []netip.Prefix
 	return conflicts
 }
 
+// domainOwnerLocked also refuses a learned domain nested under another
+// profile's configured suffix: longest match would otherwise let one tailnet's
+// admin take "db.<other tailnet's MagicDNS suffix>" away from that tailnet.
 func (c *Config) domainOwnerLocked(self, d string) string {
 	for _, o := range c.sorted {
-		if o.Name != self && (slices.Contains(o.Suffixes, d) || slices.Contains(o.learnedSuffixes, d)) {
+		if o.Name == self {
+			continue
+		}
+		if slices.Contains(o.learnedSuffixes, d) || slices.ContainsFunc(o.Suffixes, func(s string) bool {
+			return d == s || strings.HasSuffix(d, s)
+		}) {
 			return o.Name
 		}
 	}
 	return ""
 }
 
+// routeOwnerLocked is domainOwnerLocked for prefixes: a learned route inside
+// another profile's ip_routes would win on specificity.
 func (c *Config) routeOwnerLocked(self string, r netip.Prefix) string {
 	for _, o := range c.sorted {
-		if o.Name != self && (slices.Contains(o.routes, r) || slices.Contains(o.learnedRoutes, r)) {
+		if o.Name == self {
+			continue
+		}
+		if slices.Contains(o.learnedRoutes, r) || slices.ContainsFunc(o.routes, func(s netip.Prefix) bool {
+			return s.Bits() <= r.Bits() && s.Contains(r.Addr())
+		}) {
 			return o.Name
 		}
 	}
 	return ""
+}
+
+// isSplitDNSName reports whether host falls under one of profile's learned
+// split-DNS domains.
+func (c *Config) isSplitDNSName(profile, host string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	p, ok := c.Profiles[profile]
+	if !ok {
+		return false
+	}
+	return slices.ContainsFunc(p.learnedSuffixes, func(s string) bool {
+		return strings.HasSuffix(host, s) || host == strings.TrimPrefix(s, ".")
+	})
 }
 
 // LearnedOf reports the split-DNS domains (no leading dot) and subnet routes

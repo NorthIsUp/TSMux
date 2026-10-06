@@ -31,6 +31,11 @@ type Node struct {
 	Profile *Profile
 	srv     *tsnet.Server
 	lock    *os.File
+	cfg     *Config
+
+	// Serializes netmap read + apply, so a refresh that read the netmap
+	// before an accept-routes toggle cannot land after the toggle's own.
+	learnMu sync.Mutex
 
 	// The control server hands out the interactive login URL once and
 	// clears it from later status reads, so hold onto it until we are up.
@@ -196,7 +201,7 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 		return fmt.Errorf("profile %s: %w", p.Name, err)
 	}
 	m.mu.Lock()
-	m.nodes[p.Name] = &Node{Profile: p, srv: srv, lock: lock}
+	m.nodes[p.Name] = &Node{Profile: p, srv: srv, lock: lock, cfg: m.cfg}
 	m.mu.Unlock()
 
 	if p.AcceptRoutes && firstRun {
@@ -283,8 +288,10 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 			// subnet routers, so stop sending those names and IPs to it.
 			if st.BackendState != "Running" && !netmapAt.IsZero() {
 				netmapAt = time.Time{}
+				n.learnMu.Lock()
 				m.cfg.setLearned(name, nil, nil)
 				n.setRouteConflicts(nil)
+				n.learnMu.Unlock()
 			}
 		}
 		select {
@@ -344,6 +351,8 @@ func magicSuffix(st *ipnstate.Status) string {
 // domains and subnet routes. A failed read keeps the previous set rather than
 // dropping live routes over a transient LocalAPI error.
 func (m *Manager) refreshLearned(ctx context.Context, lc *local.Client, n *Node) {
+	n.learnMu.Lock()
+	defer n.learnMu.Unlock()
 	name := n.Profile.Name
 	nm, prefs, err := fetchNetmap(ctx, lc)
 	if err != nil {
@@ -447,16 +456,71 @@ func (m *Manager) Dial(ctx context.Context, network, hostport string) (net.Conn,
 
 // Dial reaches hostport inside this node's tailnet.
 //
-// tsnet's own Dial is tried first because only it resolves the tailnet's DNS
-// the way the tailnet means it — split-DNS domains like a company's own
-// hostnames are invisible to any resolver outside the node. If that dial
+// Learned split-DNS names never reach tsnet's Dial (see dialSplitDNS). For
+// everything else tsnet's Dial is tried first, since it resolves MagicDNS
+// names from the netmap. If that dial
 // fails we retry against the tailnet's A records explicitly, because tsnet
 // commits to a single address and a peer advertising an unreachable IPv6
 // address would otherwise fail outright while its IPv4 address works.
 func (n *Node) Dial(ctx context.Context, network, hostport string) (net.Conn, error) {
-	return dialV4Fallback(ctx, hostport,
-		func(ctx context.Context, addr string) (net.Conn, error) { return n.srv.Dial(ctx, network, addr) },
+	dial := func(ctx context.Context, addr string) (net.Conn, error) { return n.srv.Dial(ctx, network, addr) }
+	if n.cfg != nil && n.cfg.isSplitDNSName(n.Profile.Name, SplitHost(hostport)) {
+		return dialSplitDNS(ctx, hostport, dial, n.lookupTailnet)
+	}
+	return dialV4Fallback(ctx, hostport, dial,
 		func(ctx context.Context, host string) ([]netip.Addr, error) { return n.queryTailnetDNS(ctx, host, "A") })
+}
+
+func (n *Node) lookupTailnet(ctx context.Context, host string) ([]netip.Addr, error) {
+	var out []netip.Addr
+	var firstErr error
+	for _, qtype := range []string{"A", "AAAA"} {
+		a, err := n.queryTailnetDNS(ctx, host, qtype)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		out = append(out, a...)
+	}
+	if len(out) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+// dialSplitDNS resolves through the tailnet before dialing. tsnet's own Dial
+// only knows MagicDNS names and hands anything else to the host's resolver,
+// which would send a split-DNS name to public DNS and get no answer.
+func dialSplitDNS(
+	ctx context.Context,
+	hostport string,
+	dial func(context.Context, string) (net.Conn, error),
+	lookup func(context.Context, string) ([]netip.Addr, error),
+) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("%s: tailnet DNS: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("%s: no answer from this tailnet's DNS", host)
+	}
+	var first error
+	for _, ip := range ips {
+		c, err := dial(ctx, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return c, nil
+		}
+		if first == nil {
+			first = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, first
 }
 
 // dialV4Fallback is Node.Dial's logic without a tailnet attached to it. The
