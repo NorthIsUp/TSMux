@@ -1,6 +1,7 @@
 package tsmux
 
 import (
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -143,5 +144,61 @@ func TestPACPicksUpLearnedSuffix(t *testing.T) {
 	got := runPAC(t, c, []string{"nas.tailnet-ab.ts.net"})
 	if want := "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"; got[0] != want {
 		t.Errorf("got %q, want %q", got[0], want)
+	}
+}
+
+// Learned split-DNS domains and subnet routes reach the browser, with the
+// same longest-match precedence the router uses even when the less specific
+// claim belongs to a profile that sorts first.
+func TestPACLearnedDomainsAndRoutes(t *testing.T) {
+	c := pacCfg(t)
+	pfx := netip.MustParsePrefix
+	c.setLearned("corp", []string{".example.com"}, []netip.Prefix{pfx("10.0.0.0/8"), pfx("fd7a:1::/48")})
+	c.setLearned("home", []string{".git.example.com"}, []netip.Prefix{pfx("10.1.0.0/16")})
+	const (
+		corp = "PROXY 127.0.0.1:43110; SOCKS5 127.0.0.1:43111"
+		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
+	)
+	cases := []struct{ host, want string }{
+		{"wiki.example.com", corp},
+		{"example.com", corp},
+		{"src.git.example.com", home},
+		{"10.9.9.9", corp},
+		{"10.1.2.3", home},
+		{"11.0.0.1", "DIRECT"},
+		{"notexample.com", "DIRECT"},
+	}
+	hosts := make([]string, len(cases))
+	for i, tc := range cases {
+		hosts[i] = tc.host
+	}
+	got := runPAC(t, c, hosts)
+	for i, tc := range cases {
+		if got[i] != tc.want {
+			t.Errorf("%s -> %q, want %q", tc.host, got[i], tc.want)
+		}
+		if tc.want == "DIRECT" {
+			continue
+		}
+		m, err := c.Route(tc.host)
+		if err != nil || !strings.Contains(tc.want, strconv.Itoa(m.Profile.HTTPPort)) {
+			t.Errorf("%s: PAC says %q, Route says %v %v", tc.host, got[i], m, err)
+		}
+	}
+	// isInNet resolves names, so it may only ever run behind the IP test, and
+	// IPv6 routes have no PAC form at all.
+	pac := c.PAC()
+	for _, line := range strings.Split(pac, "\n") {
+		if strings.Contains(line, "isInNet(") && !strings.Contains(line, "tsmuxIsIP &&") {
+			t.Errorf("unguarded isInNet: %s", line)
+		}
+	}
+	if strings.Contains(pac, "fd7a") {
+		t.Error("IPv6 route leaked into the PAC")
+	}
+
+	c.setLearned("corp", nil, nil)
+	if got := runPAC(t, c, []string{"wiki.example.com", "10.9.9.9"}); got[0] != "DIRECT" || got[1] != "DIRECT" {
+		t.Errorf("forgotten claims still proxied: %v", got)
 	}
 }

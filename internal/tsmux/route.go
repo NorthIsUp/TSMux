@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -37,11 +38,9 @@ func (c *Config) Route(hostport string) (*Match, error) {
 	defer c.mu.RUnlock()
 
 	if ip, err := netip.ParseAddr(host); err == nil {
-		for _, p := range c.sorted {
-			for _, pfx := range p.routes {
-				if pfx.Contains(ip) {
-					return &Match{p, "ip_route " + pfx.String()}, nil
-				}
+		for _, r := range c.ipRulesLocked() {
+			if r.pfx.Contains(ip) {
+				return &Match{r.profile, r.kind + " " + r.pfx.String()}, nil
 			}
 		}
 		if !c.Security.AllowIPLiterals {
@@ -50,21 +49,11 @@ func (c *Config) Route(hostport string) (*Match, error) {
 		return c.fallback(host, "ip literal")
 	}
 
-	var best *Profile
-	var bestLen int
-	var reason string
-	for _, p := range c.sorted {
-		for _, s := range p.Suffixes {
-			// ".foo.ts.net" matches both "a.foo.ts.net" and bare "foo.ts.net".
-			if strings.HasSuffix(host, s) || host == strings.TrimPrefix(s, ".") {
-				if len(s) > bestLen {
-					best, bestLen, reason = p, len(s), "suffix "+s
-				}
-			}
+	for _, r := range c.domainRulesLocked() {
+		// ".foo.ts.net" matches both "a.foo.ts.net" and bare "foo.ts.net".
+		if strings.HasSuffix(host, r.suffix) || host == strings.TrimPrefix(r.suffix, ".") {
+			return &Match{r.profile, r.kind + " " + r.suffix}, nil
 		}
-	}
-	if best != nil {
-		return &Match{best, reason}, nil
 	}
 
 	if !strings.Contains(host, ".") {
@@ -96,6 +85,56 @@ func (c *Config) fallback(host, why string) (*Match, error) {
 		return nil, fmt.Errorf("%s: no profile claims this host", host)
 	}
 	return &Match{c.sorted[0], why + " to " + c.sorted[0].Name}, nil
+}
+
+type domainRule struct {
+	suffix  string
+	profile *Profile
+	kind    string
+}
+
+type ipRule struct {
+	pfx     netip.Prefix
+	profile *Profile
+	kind    string
+}
+
+// domainRulesLocked lists every claimed suffix, longest first. Route and the
+// PAC both take the first match from this one ordering, so a browser and the
+// CLI cannot disagree about which tailnet owns a name. Ties keep profile
+// order, config before learned.
+func (c *Config) domainRulesLocked() []domainRule {
+	var out []domainRule
+	for _, p := range c.sorted {
+		for _, s := range p.Suffixes {
+			out = append(out, domainRule{s, p, "suffix"})
+		}
+	}
+	for _, p := range c.sorted {
+		for _, s := range p.learnedSuffixes {
+			out = append(out, domainRule{s, p, "split_dns"})
+		}
+	}
+	slices.SortStableFunc(out, func(a, b domainRule) int { return len(b.suffix) - len(a.suffix) })
+	return out
+}
+
+// ipRulesLocked is domainRulesLocked for IP literals: most specific prefix
+// first, so a /24 one tailnet routes beats another tailnet's /8.
+func (c *Config) ipRulesLocked() []ipRule {
+	var out []ipRule
+	for _, p := range c.sorted {
+		for _, r := range p.routes {
+			out = append(out, ipRule{r, p, "ip_route"})
+		}
+	}
+	for _, p := range c.sorted {
+		for _, r := range p.learnedRoutes {
+			out = append(out, ipRule{r, p, "subnet_route"})
+		}
+	}
+	slices.SortStableFunc(out, func(a, b ipRule) int { return b.pfx.Bits() - a.pfx.Bits() })
+	return out
 }
 
 // PACHosts lists every suffix a profile claims, for PAC generation.

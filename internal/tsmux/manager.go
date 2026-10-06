@@ -38,6 +38,9 @@ type Node struct {
 	authURL  string
 	suffix   string // learned MagicDNS suffix, no leading dot
 	conflict string // profile already claiming that suffix, if any
+	// learned split-DNS domains and subnet routes another profile already
+	// holds, as "claim (owner)"
+	routeConflicts []string
 
 	// Uptime is per tailnet, not per daemon: tailnets drop and reconnect
 	// independently, and one that just came back is worth noticing.
@@ -88,6 +91,24 @@ func (n *Node) learned() (suffix, conflict string) {
 	n.authMu.Lock()
 	defer n.authMu.Unlock()
 	return n.suffix, n.conflict
+}
+
+// setRouteConflicts reports whether the set changed, so the caller logs a
+// conflict once rather than on every netmap refresh.
+func (n *Node) setRouteConflicts(c []string) bool {
+	n.authMu.Lock()
+	defer n.authMu.Unlock()
+	if slices.Equal(n.routeConflicts, c) {
+		return false
+	}
+	n.routeConflicts = c
+	return true
+}
+
+func (n *Node) RouteConflicts() []string {
+	n.authMu.Lock()
+	defer n.authMu.Unlock()
+	return slices.Clone(n.routeConflicts)
 }
 
 type Manager struct {
@@ -204,6 +225,7 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 		return
 	}
 	announced, learned, emptyRuns := "", "", 0
+	var netmapAt time.Time
 	for ctx.Err() == nil {
 		tick := time.Second
 		if st, err := lc.StatusWithoutPeers(ctx); err == nil {
@@ -224,6 +246,10 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 				if want := magicSuffix(st); want != "" && want != learned {
 					learned = want
 					m.learnSuffix(n, want)
+				}
+				if time.Since(netmapAt) >= netmapEvery {
+					netmapAt = time.Now()
+					m.refreshLearned(ctx, lc, n)
 				}
 				tick = 5 * time.Second
 			case "NeedsMachineAuth":
@@ -252,6 +278,13 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 					}
 					n.setAuthURL(st.AuthURL)
 				}
+			}
+			// A node that is not up cannot reach its split-DNS servers or
+			// subnet routers, so stop sending those names and IPs to it.
+			if st.BackendState != "Running" && !netmapAt.IsZero() {
+				netmapAt = time.Time{}
+				m.cfg.setLearned(name, nil, nil)
+				n.setRouteConflicts(nil)
 			}
 		}
 		select {
@@ -305,6 +338,32 @@ func magicSuffix(st *ipnstate.Status) string {
 		_, suffix, _ = strings.Cut(strings.TrimSuffix(st.Self.DNSName, "."), ".")
 	}
 	return strings.ToLower(strings.Trim(suffix, "."))
+}
+
+// refreshLearned re-reads the netmap and swaps in this node's split-DNS
+// domains and subnet routes. A failed read keeps the previous set rather than
+// dropping live routes over a transient LocalAPI error.
+func (m *Manager) refreshLearned(ctx context.Context, lc *local.Client, n *Node) {
+	name := n.Profile.Name
+	nm, prefs, err := fetchNetmap(ctx, lc)
+	if err != nil {
+		if m.verbose {
+			log.Printf("[%s] netmap: %v", name, err)
+		}
+		return
+	}
+	before, beforeRoutes := m.cfg.LearnedOf(name)
+	domains, routes := learnFromNetmap(nm, prefs.CorpDNS(), prefs.RouteAll())
+	conflicts := m.cfg.setLearned(name, domains, routes)
+	after, afterRoutes := m.cfg.LearnedOf(name)
+	if !slices.Equal(before, after) || !slices.Equal(beforeRoutes, afterRoutes) {
+		log.Printf("[%s] routing split DNS [%s] and subnet routes [%s]",
+			name, strings.Join(after, ", "), strings.Join(afterRoutes, ", "))
+	}
+	if n.setRouteConflicts(conflicts) && len(conflicts) > 0 {
+		log.Printf("[%s] already routed to another profile, left there: %s; reach this profile on 127.0.0.1:%d",
+			name, strings.Join(conflicts, ", "), n.Profile.HTTPPort)
+	}
 }
 
 func (m *Manager) learnSuffix(n *Node, suffix string) {
@@ -503,6 +562,9 @@ type Status struct {
 	Tailnet        string           `json:"tailnet,omitempty"`
 	MagicDNSSuffix string           `json:"magic_dns_suffix,omitempty"`
 	SuffixConflict string           `json:"suffix_conflict,omitempty"`
+	SplitDNS       []string         `json:"split_dns,omitempty"`
+	SubnetRoutes   []string         `json:"subnet_routes,omitempty"`
+	RouteConflicts []string         `json:"route_conflicts,omitempty"`
 	User           *StatusUser      `json:"user,omitempty"`
 	KeyExpiry      *time.Time       `json:"key_expiry,omitempty"`
 	Health         []string         `json:"health,omitempty"`
@@ -578,6 +640,7 @@ func (m *Manager) StatusOf(ctx context.Context, profile string) (Status, error) 
 func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 	p := n.Profile
 	suffix, conflict := n.learned()
+	splitDNS, subnetRoutes := m.cfg.LearnedOf(p.Name)
 	s := Status{
 		Profile: p.Name, Display: p.DisplayName, State: "Stopped",
 		DeviceName:     p.Hostname,
@@ -586,6 +649,9 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 		SOCKS5:         fmt.Sprintf("127.0.0.1:%d", p.SOCKSPort),
 		MagicDNSSuffix: suffix,
 		SuffixConflict: conflict,
+		SplitDNS:       splitDNS,
+		SubnetRoutes:   subnetRoutes,
+		RouteConflicts: n.RouteConflicts(),
 		AdminURL:       adminURL(p.ControlURL),
 	}
 	lc, err := n.srv.LocalClient()
@@ -714,6 +780,13 @@ func (m *Manager) SetPrefs(ctx context.Context, profile string, mp *ipn.MaskedPr
 	}
 	if _, err := lc.EditPrefs(ctx, mp); err != nil {
 		return Status{}, err
+	}
+	// Accept routes / accept DNS gate what is learned; apply the toggle now
+	// rather than on the next netmap poll.
+	if mp.RouteAllSet || mp.CorpDNSSet {
+		if n, err := m.Node(profile); err == nil {
+			m.refreshLearned(ctx, lc, n)
+		}
 	}
 	return m.StatusOf(ctx, profile)
 }
