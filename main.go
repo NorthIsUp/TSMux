@@ -134,11 +134,18 @@ func cmdUp() *cobra.Command {
 			}
 			defer m.Close()
 
-			closeAll, err := tsmux.Serve(cfg, m)
+			token, err := tsmux.NewAPIToken()
+			if err != nil {
+				return fmt.Errorf("api token: %w", err)
+			}
+			closeAll, err := tsmux.Serve(cfg, m, cfg.LocalHandler(m, token))
 			if err != nil {
 				return err
 			}
 			defer closeAll()
+			if err := cfg.WriteAPIToken(token); err != nil {
+				return fmt.Errorf("api token: %w", err)
+			}
 			m.OnStop(stop)
 
 			if applyProxy {
@@ -179,7 +186,7 @@ func cmdDown() *cobra.Command {
 			// Wait for the listener to actually go away: callers stop the
 			// daemon in order to do something that needs it gone.
 			for i := 0; i < 60; i++ {
-				if _, err := cfg.FetchStatus(); err != nil {
+				if _, err := cfg.FetchStatus(); errors.Is(err, tsmux.ErrDaemonDown) {
 					break
 				}
 				time.Sleep(100 * time.Millisecond)
@@ -214,6 +221,9 @@ func cmdStatus() *cobra.Command {
 					if s.AuthURL != "" {
 						note = "login: " + s.AuthURL
 					}
+					if s.TailnetLock != nil && s.TailnetLock.LockedOut {
+						note = "locked out, an admin runs: " + s.TailnetLock.SignCommand
+					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
 						s.Profile, s.State, note, s.Peers, s.HTTPProxy, strings.Join(s.Suffixes, " "))
 				}
@@ -230,7 +240,7 @@ func cmdStatus() *cobra.Command {
 // contend for the same state directories, so standalone mode is opt-in.
 func fetchStatus(ctx context.Context, cfg *tsmux.Config, standalone bool) ([]tsmux.Status, error) {
 	st, err := cfg.FetchStatus()
-	if err == nil || !standalone {
+	if !errors.Is(err, tsmux.ErrDaemonDown) || !standalone {
 		return st, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -339,7 +349,7 @@ func cmdProfile() *cobra.Command {
 	var purge bool
 	rm := &cobra.Command{
 		Use: "rm <name>", Short: "Remove a profile from the config", Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := load()
 			if err != nil {
 				return err
@@ -349,14 +359,23 @@ func cmdProfile() *cobra.Command {
 			}
 			// The daemon holds the state dir open; removing it underneath a
 			// live node leaves a node with nowhere to write.
-			if live, err := cfg.FetchStatus(); err == nil {
-				for _, s := range live {
-					if s.Profile == args[0] {
-						return fmt.Errorf("profile %q is running; stop the daemon first (tsmux up is holding it)", args[0])
-					}
-				}
+			if err := cfg.RefuseIfRunning(args[0]); err != nil {
+				return err
 			}
 			dir := cfg.StateDir(args[0])
+			p := cfg.Profiles[args[0]]
+			// Purge before saving: a purge cut short (a GUI timeout, a locked
+			// dir) then leaves the profile in the config to retry, not orphaned
+			// credentials nothing points at.
+			var warning string
+			if purge {
+				warning, err = tsmux.PurgeState(cmd.Context(), dir, func(ctx context.Context) error {
+					return tsmux.LogoutStopped(ctx, p, dir)
+				})
+				if err != nil {
+					return err
+				}
+			}
 			delete(cfg.Profiles, args[0])
 			if err := cfg.Normalize(); err != nil {
 				return err
@@ -364,22 +383,26 @@ func cmdProfile() *cobra.Command {
 			if err := cfg.Save(cfg.Path()); err != nil {
 				return err
 			}
-			if purge {
-				if err := os.RemoveAll(dir); err != nil {
-					return err
-				}
+			out := map[string]any{"removed": args[0], "state_dir": dir, "purged": purge}
+			if warning != "" {
+				out["warning"] = warning
 			}
-			emit(map[string]any{"removed": args[0], "state_dir": dir, "purged": purge}, func() {
-				if purge {
+			emit(out, func() {
+				if purge && warning != "" {
 					fmt.Printf("removed %s (state dir %s deleted)\n", args[0], dir)
+					fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 					return
 				}
-				fmt.Printf("removed %s (state dir %s left in place)\n", args[0], dir)
+				if purge {
+					fmt.Printf("removed %s (logged out, state dir %s deleted)\n", args[0], dir)
+					return
+				}
+				fmt.Printf("removed %s; its login is still saved in %s and the device stays registered (use --purge to log out and delete it)\n", args[0], dir)
 			})
 			return nil
 		},
 	}
-	rm.Flags().BoolVar(&purge, "purge", false, "also delete the profile's saved tailnet credentials")
+	rm.Flags().BoolVar(&purge, "purge", false, "also log the device out and delete its saved tailnet credentials")
 	c.AddCommand(rm)
 
 	var renameDisplay string
@@ -396,11 +419,9 @@ func cmdProfile() *cobra.Command {
 				newName = args[1]
 			}
 			// Same reason as rm: the daemon holds the state dir open.
-			if live, err := cfg.FetchStatus(); err == nil && newName != args[0] {
-				for _, s := range live {
-					if s.Profile == args[0] {
-						return fmt.Errorf("profile %q is running; stop the daemon first (tsmux up is holding it)", args[0])
-					}
+			if newName != args[0] {
+				if err := cfg.RefuseIfRunning(args[0]); err != nil {
+					return err
 				}
 			}
 			if err := cfg.RenameProfile(args[0], newName, renameDisplay); err != nil {
@@ -424,7 +445,7 @@ func cmdProfile() *cobra.Command {
 
 	c.AddCommand(&cobra.Command{
 		Use: "logout <name>", Short: "Forget a profile's tailnet credentials", Args: cobra.ExactArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := load()
 			if err != nil {
 				return err
@@ -433,13 +454,22 @@ func cmdProfile() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("no profile %q", args[0])
 			}
+			var warning string
 			st, err := cfg.PostLogout(args[0])
 			if err != nil {
-				// No daemon to ask: clearing the state dir is the same thing,
-				// minus the node that would have re-asked for a login URL.
+				// Only a daemon that is plainly down, or one without this
+				// profile, leaves the state dir free for an offline logout.
+				if cfg.RefuseIfRunning(args[0]) != nil {
+					return err
+				}
+				// No node to ask: log out from a short-lived one, then clear the
+				// state dir so the next start asks for a new login.
 				dir := cfg.StateDir(args[0])
-				if rmErr := os.RemoveAll(dir); rmErr != nil {
-					return rmErr
+				warning, err = tsmux.PurgeState(cmd.Context(), dir, func(ctx context.Context) error {
+					return tsmux.LogoutStopped(ctx, p, dir)
+				})
+				if err != nil {
+					return err
 				}
 				st = tsmux.Status{
 					Profile: args[0], Display: p.DisplayName, State: "Stopped",
@@ -447,7 +477,15 @@ func cmdProfile() *cobra.Command {
 					SOCKS5:    fmt.Sprintf("127.0.0.1:%d", p.SOCKSPort),
 				}
 			}
-			emit(st, func() { fmt.Printf("logged %s out; it will ask for a new login\n", args[0]) })
+			if warning != "" {
+				st.Err = warning
+			}
+			emit(st, func() {
+				fmt.Printf("logged %s out; it will ask for a new login\n", args[0])
+				if warning != "" {
+					fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+				}
+			})
 			return nil
 		},
 	})

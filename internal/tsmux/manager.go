@@ -31,6 +31,11 @@ type Node struct {
 	Profile *Profile
 	srv     *tsnet.Server
 	lock    *os.File
+	cfg     *Config
+
+	// Serializes netmap read + apply, so a refresh that read the netmap
+	// before an accept-routes toggle cannot land after the toggle's own.
+	learnMu sync.Mutex
 
 	// The control server hands out the interactive login URL once and
 	// clears it from later status reads, so hold onto it until we are up.
@@ -38,11 +43,31 @@ type Node struct {
 	authURL  string
 	suffix   string // learned MagicDNS suffix, no leading dot
 	conflict string // profile already claiming that suffix, if any
+	// learned split-DNS domains and subnet routes another profile already
+	// holds, as "claim (owner)"
+	routeConflicts []string
 
 	// Uptime is per tailnet, not per daemon: tailnets drop and reconnect
 	// independently, and one that just came back is worth noticing.
 	upMu sync.Mutex
 	upAt time.Time
+
+	// exitNode is the selected exit node while this tailnet is connected and
+	// running, empty otherwise: a stopped tailnet carries nothing.
+	exitNode string
+	exitLAN  bool
+}
+
+func (n *Node) setExit(id string, allowLAN bool) {
+	n.upMu.Lock()
+	n.exitNode, n.exitLAN = id, allowLAN
+	n.upMu.Unlock()
+}
+
+func (n *Node) exit() (id string, allowLAN bool) {
+	n.upMu.Lock()
+	defer n.upMu.Unlock()
+	return n.exitNode, n.exitLAN
 }
 
 func (n *Node) setAuthURL(u string) {
@@ -90,6 +115,24 @@ func (n *Node) learned() (suffix, conflict string) {
 	return n.suffix, n.conflict
 }
 
+// setRouteConflicts reports whether the set changed, so the caller logs a
+// conflict once rather than on every netmap refresh.
+func (n *Node) setRouteConflicts(c []string) bool {
+	n.authMu.Lock()
+	defer n.authMu.Unlock()
+	if slices.Equal(n.routeConflicts, c) {
+		return false
+	}
+	n.routeConflicts = c
+	return true
+}
+
+func (n *Node) RouteConflicts() []string {
+	n.authMu.Lock()
+	defer n.authMu.Unlock()
+	return slices.Clone(n.routeConflicts)
+}
+
 type Manager struct {
 	// stop asks the daemon's own process to shut down; set by `tsmux up` so
 	// the GUI can stop a daemon it did not spawn instead of refusing to act.
@@ -99,6 +142,11 @@ type Manager struct {
 
 	mu    sync.RWMutex
 	nodes map[string]*Node
+
+	// exitMu serialises refreshExit, which every watch loop and SetPrefs
+	// call: without it a caller holding an older snapshot can write its
+	// stale pick over a newer one.
+	exitMu sync.Mutex
 }
 
 func NewManager(cfg *Config, verbose bool) *Manager {
@@ -159,13 +207,20 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 	if err != nil {
 		return fmt.Errorf("profile %s: %w", p.Name, err)
 	}
+	// Only once the lock is held: walking a dir another instance's tsnet is
+	// renaming temp files through fails on the vanished temp file, and that
+	// error would hide the "already running" one.
+	if err := protectStateDir(filepath.Dir(dir), dir); err != nil {
+		lock.Close()
+		return fmt.Errorf("profile %s: protect state dir: %w", p.Name, err)
+	}
 	srv := &tsnet.Server{
 		Dir:        dir,
 		Hostname:   p.Hostname,
 		AuthKey:    p.AuthKey(),
 		ControlURL: p.ControlURL,
 		Logf:       func(string, ...any) {},
-		UserLogf:   func(f string, a ...any) { log.Printf("["+p.Name+"] "+f, a...) },
+		UserLogf:   redactedLogf("[" + p.Name + "] "),
 	}
 	if m.verbose {
 		srv.Logf = srv.UserLogf
@@ -175,7 +230,7 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 		return fmt.Errorf("profile %s: %w", p.Name, err)
 	}
 	m.mu.Lock()
-	m.nodes[p.Name] = &Node{Profile: p, srv: srv, lock: lock}
+	m.nodes[p.Name] = &Node{Profile: p, srv: srv, lock: lock, cfg: m.cfg}
 	m.mu.Unlock()
 
 	if p.AcceptRoutes && firstRun {
@@ -204,9 +259,11 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 		return
 	}
 	announced, learned, emptyRuns := "", "", 0
+	var netmapAt time.Time
 	for ctx.Err() == nil {
 		tick := time.Second
 		if st, err := lc.StatusWithoutPeers(ctx); err == nil {
+			m.observeExit(ctx, n, lc, st.BackendState)
 			var request bool
 			request, emptyRuns = shouldRequestLogin(st.BackendState, st.AuthURL, n.AuthURL(), emptyRuns)
 			if request {
@@ -224,6 +281,10 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 				if want := magicSuffix(st); want != "" && want != learned {
 					learned = want
 					m.learnSuffix(n, want)
+				}
+				if time.Since(netmapAt) >= netmapEvery {
+					netmapAt = time.Now()
+					m.refreshLearned(ctx, lc, n)
 				}
 				tick = 5 * time.Second
 			case "NeedsMachineAuth":
@@ -248,16 +309,70 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 				if st.AuthURL != "" {
 					if st.AuthURL != announced {
 						announced = st.AuthURL
-						log.Printf("[%s] needs login: %s", name, st.AuthURL)
+						log.Printf("[%s] needs login: %s", name, RedactURL(st.AuthURL))
 					}
 					n.setAuthURL(st.AuthURL)
 				}
+			}
+			// A node that is not up cannot reach its split-DNS servers or
+			// subnet routers, so stop sending those names and IPs to it.
+			if st.BackendState != "Running" && !netmapAt.IsZero() {
+				netmapAt = time.Time{}
+				n.learnMu.Lock()
+				m.cfg.setLearned(name, nil, nil)
+				n.setRouteConflicts(nil)
+				n.learnMu.Unlock()
 			}
 		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(tick):
+		}
+	}
+}
+
+// observeExit tracks the node's exit node from its prefs. Polling catches
+// changes made behind the API's back, such as the tailnet going down; a failed
+// prefs read keeps the last answer rather than flapping the PAC.
+func (m *Manager) observeExit(ctx context.Context, n *Node, lc *local.Client, backendState string) {
+	if backendState != "Running" {
+		n.setExit("", false)
+	} else if pr, err := lc.GetPrefs(ctx); err == nil {
+		n.setExit(effectiveExit(pr))
+	}
+	m.refreshExit()
+}
+
+func effectiveExit(pr *ipn.Prefs) (id string, allowLAN bool) {
+	if !pr.WantRunning || pr.ExitNodeID == "" {
+		return "", false
+	}
+	return string(pr.ExitNodeID), pr.ExitNodeAllowLANAccess
+}
+
+// refreshExit points public traffic at the first profile, in config order,
+// that is using an exit node. Several can have one selected, but a host has a
+// single default route; the status's exit_profile tells the UI which won.
+func (m *Manager) refreshExit() {
+	m.exitMu.Lock()
+	defer m.exitMu.Unlock()
+	var r ExitRoute
+	for _, p := range m.cfg.Ordered() {
+		n, err := m.Node(p.Name)
+		if err != nil {
+			continue
+		}
+		if id, lan := n.exit(); id != "" {
+			r = ExitRoute{Profile: p.Name, AllowLAN: lan}
+			break
+		}
+	}
+	if m.cfg.SetExitRoute(r) {
+		if r.Profile == "" {
+			log.Printf("public traffic goes direct")
+		} else {
+			log.Printf("[%s] public traffic goes through this tailnet's exit node", r.Profile)
 		}
 	}
 }
@@ -305,6 +420,34 @@ func magicSuffix(st *ipnstate.Status) string {
 		_, suffix, _ = strings.Cut(strings.TrimSuffix(st.Self.DNSName, "."), ".")
 	}
 	return strings.ToLower(strings.Trim(suffix, "."))
+}
+
+// refreshLearned re-reads the netmap and swaps in this node's split-DNS
+// domains and subnet routes. A failed read keeps the previous set rather than
+// dropping live routes over a transient LocalAPI error.
+func (m *Manager) refreshLearned(ctx context.Context, lc *local.Client, n *Node) {
+	n.learnMu.Lock()
+	defer n.learnMu.Unlock()
+	name := n.Profile.Name
+	nm, prefs, err := fetchNetmap(ctx, lc)
+	if err != nil {
+		if m.verbose {
+			log.Printf("[%s] netmap: %v", name, err)
+		}
+		return
+	}
+	before, beforeRoutes := m.cfg.LearnedOf(name)
+	domains, routes := learnFromNetmap(nm, prefs.CorpDNS(), prefs.RouteAll())
+	conflicts := m.cfg.setLearned(name, domains, routes)
+	after, afterRoutes := m.cfg.LearnedOf(name)
+	if !slices.Equal(before, after) || !slices.Equal(beforeRoutes, afterRoutes) {
+		log.Printf("[%s] routing split DNS [%s] and subnet routes [%s]",
+			name, strings.Join(after, ", "), strings.Join(afterRoutes, ", "))
+	}
+	if n.setRouteConflicts(conflicts) && len(conflicts) > 0 {
+		log.Printf("[%s] already routed to another profile, left there: %s; reach this profile on 127.0.0.1:%d",
+			name, strings.Join(conflicts, ", "), n.Profile.HTTPPort)
+	}
 }
 
 func (m *Manager) learnSuffix(n *Node, suffix string) {
@@ -388,16 +531,71 @@ func (m *Manager) Dial(ctx context.Context, network, hostport string) (net.Conn,
 
 // Dial reaches hostport inside this node's tailnet.
 //
-// tsnet's own Dial is tried first because only it resolves the tailnet's DNS
-// the way the tailnet means it — split-DNS domains like a company's own
-// hostnames are invisible to any resolver outside the node. If that dial
+// Learned split-DNS names never reach tsnet's Dial (see dialSplitDNS). For
+// everything else tsnet's Dial is tried first, since it resolves MagicDNS
+// names from the netmap. If that dial
 // fails we retry against the tailnet's A records explicitly, because tsnet
 // commits to a single address and a peer advertising an unreachable IPv6
 // address would otherwise fail outright while its IPv4 address works.
 func (n *Node) Dial(ctx context.Context, network, hostport string) (net.Conn, error) {
-	return dialV4Fallback(ctx, hostport,
-		func(ctx context.Context, addr string) (net.Conn, error) { return n.srv.Dial(ctx, network, addr) },
+	dial := func(ctx context.Context, addr string) (net.Conn, error) { return n.srv.Dial(ctx, network, addr) }
+	if n.cfg != nil && n.cfg.isSplitDNSName(n.Profile.Name, SplitHost(hostport)) {
+		return dialSplitDNS(ctx, hostport, dial, n.lookupTailnet)
+	}
+	return dialV4Fallback(ctx, hostport, dial,
 		func(ctx context.Context, host string) ([]netip.Addr, error) { return n.queryTailnetDNS(ctx, host, "A") })
+}
+
+func (n *Node) lookupTailnet(ctx context.Context, host string) ([]netip.Addr, error) {
+	var out []netip.Addr
+	var firstErr error
+	for _, qtype := range []string{"A", "AAAA"} {
+		a, err := n.queryTailnetDNS(ctx, host, qtype)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+		out = append(out, a...)
+	}
+	if len(out) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+// dialSplitDNS resolves through the tailnet before dialing. tsnet's own Dial
+// only knows MagicDNS names and hands anything else to the host's resolver,
+// which would send a split-DNS name to public DNS and get no answer.
+func dialSplitDNS(
+	ctx context.Context,
+	hostport string,
+	dial func(context.Context, string) (net.Conn, error),
+	lookup func(context.Context, string) ([]netip.Addr, error),
+) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("%s: tailnet DNS: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("%s: no answer from this tailnet's DNS", host)
+	}
+	var first error
+	for _, ip := range ips {
+		c, err := dial(ctx, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return c, nil
+		}
+		if first == nil {
+			first = err
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, first
 }
 
 // dialV4Fallback is Node.Dial's logic without a tailnet attached to it. The
@@ -500,17 +698,60 @@ type Status struct {
 	SOCKS5     string   `json:"socks5_proxy"`
 	Err        string   `json:"error,omitempty"`
 
-	Tailnet        string           `json:"tailnet,omitempty"`
-	MagicDNSSuffix string           `json:"magic_dns_suffix,omitempty"`
-	SuffixConflict string           `json:"suffix_conflict,omitempty"`
-	User           *StatusUser      `json:"user,omitempty"`
-	KeyExpiry      *time.Time       `json:"key_expiry,omitempty"`
-	Health         []string         `json:"health,omitempty"`
-	ConnectedSince *time.Time       `json:"connected_since,omitempty"`
-	AdminURL       string           `json:"admin_url,omitempty"`
-	Prefs          *StatusPrefs     `json:"prefs,omitempty"`
-	ExitNodes      []ExitNodeOption `json:"exit_node_options,omitempty"`
-	Devices        []Device         `json:"devices,omitempty"`
+	Tailnet        string       `json:"tailnet,omitempty"`
+	MagicDNSSuffix string       `json:"magic_dns_suffix,omitempty"`
+	SuffixConflict string       `json:"suffix_conflict,omitempty"`
+	SplitDNS       []string     `json:"split_dns,omitempty"`
+	SubnetRoutes   []string     `json:"subnet_routes,omitempty"`
+	RouteConflicts []string     `json:"route_conflicts,omitempty"`
+	User           *StatusUser  `json:"user,omitempty"`
+	KeyExpiry      *time.Time   `json:"key_expiry,omitempty"`
+	Health         []string     `json:"health,omitempty"`
+	ConnectedSince *time.Time   `json:"connected_since,omitempty"`
+	AdminURL       string       `json:"admin_url,omitempty"`
+	Prefs          *StatusPrefs `json:"prefs,omitempty"`
+	// ExitProfile is the same on every profile's status: the one profile
+	// whose exit node public traffic actually uses, if any.
+	ExitProfile string           `json:"exit_profile,omitempty"`
+	ExitNodes   []ExitNodeOption `json:"exit_node_options,omitempty"`
+	Devices     []Device         `json:"devices,omitempty"`
+	TailnetLock *TailnetLock     `json:"tailnet_lock,omitempty"`
+}
+
+// TailnetLock is this node's standing under tailnet lock. A locked-out node
+// still reports Running, just with no peers, so the UI needs this to tell the
+// two apart and to show the keys an admin signs. Public keys only.
+type TailnetLock struct {
+	Enabled   bool   `json:"enabled"`
+	Signed    bool   `json:"signed"`
+	LockedOut bool   `json:"locked_out"`
+	NodeKey   string `json:"node_key,omitempty"`
+	PublicKey string `json:"public_key,omitempty"`
+	// SignCommand is what an admin runs on a node with a trusted key.
+	SignCommand string `json:"sign_command,omitempty"`
+}
+
+// tailnetLockOf mirrors `tailscale lock status`: locked out means lock is on,
+// this node has both keys, and its node key carries no valid signature. Only a
+// Running node can tell: before the first netmap (Starting, NeedsLogin, a
+// stopped node) the backend has no self signature to check and reports every
+// node unsigned.
+func tailnetLockOf(st *ipnstate.TailnetLockStatus, running bool) *TailnetLock {
+	if st == nil {
+		return nil
+	}
+	tl := &TailnetLock{Enabled: st.Enabled, Signed: st.NodeKeySigned}
+	if !st.PublicKey.IsZero() {
+		tl.PublicKey = st.PublicKey.CLIString()
+	}
+	if st.NodeKey != nil && !st.NodeKey.IsZero() {
+		tl.NodeKey = st.NodeKey.String()
+	}
+	if running && st.Enabled && tl.NodeKey != "" && tl.PublicKey != "" && !st.NodeKeySigned {
+		tl.LockedOut = true
+		tl.SignCommand = fmt.Sprintf("tailscale lock sign %s %s", tl.NodeKey, tl.PublicKey)
+	}
+	return tl
 }
 
 // Device is one peer in the tailnet, for the GUI's device list. Owner and
@@ -578,6 +819,7 @@ func (m *Manager) StatusOf(ctx context.Context, profile string) (Status, error) 
 func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 	p := n.Profile
 	suffix, conflict := n.learned()
+	splitDNS, subnetRoutes := m.cfg.LearnedOf(p.Name)
 	s := Status{
 		Profile: p.Name, Display: p.DisplayName, State: "Stopped",
 		DeviceName:     p.Hostname,
@@ -586,7 +828,11 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 		SOCKS5:         fmt.Sprintf("127.0.0.1:%d", p.SOCKSPort),
 		MagicDNSSuffix: suffix,
 		SuffixConflict: conflict,
+		SplitDNS:       splitDNS,
+		SubnetRoutes:   subnetRoutes,
+		RouteConflicts: n.RouteConflicts(),
 		AdminURL:       adminURL(p.ControlURL),
+		ExitProfile:    m.cfg.ExitRoute().Profile,
 	}
 	lc, err := n.srv.LocalClient()
 	if err != nil {
@@ -667,6 +913,12 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 	} else if s.Err == "" {
 		s.Err = err.Error()
 	}
+	// Bounded so a slow tka read can't stall the whole status poll.
+	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if tl, err := lc.TailnetLockStatus(lctx); err == nil {
+		s.TailnetLock = tailnetLockOf(tl, s.State == "Running")
+	}
 	return s
 }
 
@@ -712,8 +964,22 @@ func (m *Manager) SetPrefs(ctx context.Context, profile string, mp *ipn.MaskedPr
 			return Status{}, fmt.Errorf("unknown exit node %q", mp.ExitNodeID)
 		}
 	}
-	if _, err := lc.EditPrefs(ctx, mp); err != nil {
+	pr, err := lc.EditPrefs(ctx, mp)
+	if err != nil {
 		return Status{}, err
+	}
+	// Accept routes / accept DNS gate what is learned; apply the toggle now
+	// rather than on the next netmap poll.
+	if mp.RouteAllSet || mp.CorpDNSSet {
+		if n, err := m.Node(profile); err == nil {
+			m.refreshLearned(ctx, lc, n)
+		}
+	}
+	// Apply now rather than on the next watch tick, so the PAC and the status
+	// this call returns already agree with the new prefs.
+	if n, err := m.Node(profile); err == nil && !n.UpSince().IsZero() {
+		n.setExit(effectiveExit(pr))
+		m.refreshExit()
 	}
 	return m.StatusOf(ctx, profile)
 }
@@ -744,6 +1010,7 @@ func (m *Manager) Close() error {
 		}
 	}
 	m.nodes = map[string]*Node{}
+	m.cfg.SetExitRoute(ExitRoute{})
 	return err
 }
 
@@ -776,7 +1043,7 @@ func lockStateDir(dir string) (*os.File, error) {
 	}
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		f.Close()
-		return nil, fmt.Errorf("another tsmux is already running for this profile (state dir %s)", dir)
+		return nil, fmt.Errorf("%w (state dir %s)", ErrStateDirLocked, dir)
 	}
 	return f, nil
 }

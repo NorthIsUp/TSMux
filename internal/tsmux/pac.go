@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,7 +23,9 @@ import (
 
 // PAC renders a proxy auto-config that sends each tailnet's names to that
 // profile's own proxy port. Browsers then reach every tailnet at once, with
-// no system-wide interception of ordinary traffic.
+// no system-wide interception of ordinary traffic — unless an exit node is in
+// use, in which case everything else goes to that profile's proxy, whose
+// dials follow the node's default route out through the exit node.
 func (c *Config) PAC() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -33,25 +36,55 @@ func (c *Config) PAC() string {
 	// PAC files are real JavaScript, so test for a literal address directly
 	// rather than letting isInNet() trigger a DNS lookup on every domain.
 	b.WriteString("  var tsmuxIsIP = /^[0-9]{1,3}(\\.[0-9]{1,3}){3}$/.test(host);\n")
+	// isPlainHostName is true of an IPv6 literal, which has no dots; some
+	// browsers keep its brackets.
+	b.WriteString("  var tsmuxIP6 = host.indexOf(\":\") >= 0 ? host.replace(/^\\[|\\]$/g, \"\") : \"\";\n")
 
-	for _, p := range c.Ordered() {
-		proxy := fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
-		for _, s := range p.Suffixes {
-			apex := strings.TrimPrefix(s, ".")
-			b.WriteString(fmt.Sprintf("  if (dnsDomainIs(host, %q) || host === %q) return %q; // %s\n",
-				s, apex, proxy, p.Name))
-		}
-		for _, r := range p.IPRoutes {
-			if ip, mask, ok := cidrToPAC(r); ok {
-				b.WriteString(fmt.Sprintf("  if (tsmuxIsIP && isInNet(host, %q, %q)) return %q; // %s\n", ip, mask, proxy, p.Name))
-			}
-		}
-		if p.MatchRoot {
-			b.WriteString(fmt.Sprintf("  if (isPlainHostName(host)) return %q; // %s match_root\n", proxy, p.Name))
+	for _, r := range c.domainRulesLocked() {
+		apex := strings.TrimPrefix(r.suffix, ".")
+		b.WriteString(fmt.Sprintf("  if (dnsDomainIs(host, %q) || host === %q) return %q; // %s %s\n",
+			r.suffix, apex, pacProxy(r.profile), r.profile.Name, r.kind))
+	}
+	for _, r := range c.ipRulesLocked() {
+		if ip, mask, ok := cidrToPAC(r.pfx.String()); ok {
+			b.WriteString(fmt.Sprintf("  if (tsmuxIsIP && isInNet(host, %q, %q)) return %q; // %s %s\n",
+				ip, mask, pacProxy(r.profile), r.profile.Name, r.kind))
 		}
 	}
-	b.WriteString("  return \"DIRECT\";\n}\n")
+	for _, p := range c.Ordered() {
+		if p.MatchRoot {
+			b.WriteString(fmt.Sprintf("  if (isPlainHostName(host) && !tsmuxIP6) return %q; // %s match_root\n", pacProxy(p), p.Name))
+		}
+	}
+	exit := c.exitProfileLocked()
+	if exit == nil {
+		b.WriteString("  return \"DIRECT\";\n}\n")
+		return b.String()
+	}
+	// Mirrors exitCarriesIP and exitCarriesName.
+	b.WriteString("  if (/^(::1?$|::ffff:|fe[89ab][0-9a-f]:|fd7a:115c:a1e0:)/.test(tsmuxIP6)) return \"DIRECT\";\n")
+	writeIPv4Direct(&b, exitNever)
+	if c.exit.AllowLAN {
+		// Tailscale's "allow local network access": the LAN stays reachable
+		// directly while the exit node carries everything else.
+		b.WriteString("  if (isPlainHostName(host) && !tsmuxIP6) return \"DIRECT\";\n")
+		b.WriteString("  if (/^f[cd][0-9a-f]{2}:/.test(tsmuxIP6)) return \"DIRECT\";\n")
+		writeIPv4Direct(&b, exitLAN)
+	}
+	b.WriteString(fmt.Sprintf("  return %q; // %s exit node\n}\n", pacProxy(exit), exit.Name))
 	return b.String()
+}
+
+func writeIPv4Direct(b *strings.Builder, pfxs []netip.Prefix) {
+	for _, p := range pfxs {
+		if ip, mask, ok := cidrToPAC(p.String()); ok {
+			fmt.Fprintf(b, "  if (tsmuxIsIP && isInNet(host, %q, %q)) return \"DIRECT\";\n", ip, mask)
+		}
+	}
+}
+
+func pacProxy(p *Profile) string {
+	return fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
 }
 
 func cidrToPAC(cidr string) (ip, mask string, ok bool) {
@@ -71,8 +104,24 @@ func (c *Config) PACURL() string { return "http://" + c.Router.PACListen + "/pro
 func (c *Config) StatusURL() string { return "http://" + c.Router.PACListen + "/status" }
 
 // LocalHandler serves the PAC file and the daemon's local API on one
-// loopback listener.
-func (c *Config) LocalHandler(m *Manager) http.Handler {
+// loopback listener. Only the PAC file is open: browsers and the system proxy
+// fetch it with no way to add a header, and it holds nothing but suffixes and
+// loopback ports. Every other path, unknown ones included, needs the token.
+func (c *Config) LocalHandler(m *Manager, token string) http.Handler {
+	all := c.InProcessHandler(m)
+	authed := requireToken(token, all)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/proxy.pac" {
+			all.ServeHTTP(w, r)
+			return
+		}
+		authed.ServeHTTP(w, r)
+	})
+}
+
+// InProcessHandler is the PAC and API with no token check, for callers that
+// never cross a socket (the iOS extension's TSMuxCall). Never listen with it.
+func (c *Config) InProcessHandler(m *Manager) http.Handler {
 	mux := http.NewServeMux()
 	pac := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
@@ -168,10 +217,9 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	enc.Encode(v)
 }
 
-// guard is the whole authorization story for this listener. A browser loads
-// the PAC file from it, so loopback alone is not a boundary: any page could
-// otherwise POST here. No token file — anything able to read a token could
-// already rewrite config.yaml and the state dir, so it would buy nothing.
+// guard keeps browsers out: a browser loads the PAC file from this listener,
+// so any page could otherwise reach it. requireToken keeps out other local
+// users and apps, which loopback alone does not.
 func guard(h http.HandlerFunc, write bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
@@ -219,14 +267,9 @@ func (c *Config) PostLogout(profile string) (Status, error) {
 
 // Shutdown asks a running daemon to exit, whoever started it.
 func (c *Config) Shutdown() error {
-	cl := &http.Client{Timeout: 3 * time.Second}
-	req, err := http.NewRequest(http.MethodPost, "http://"+c.Router.PACListen+"/shutdown", nil)
+	resp, err := c.call(http.MethodPost, "/shutdown", nil, 3*time.Second)
 	if err != nil {
 		return err
-	}
-	resp, err := cl.Do(req)
-	if err != nil {
-		return fmt.Errorf("tsmux daemon is not running")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -240,41 +283,92 @@ func (c *Config) post(path string, body any) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	cl := &http.Client{Timeout: 30 * time.Second}
-	resp, err := cl.Post("http://"+c.Router.PACListen+path, "application/json", bytes.NewReader(b))
+	resp, err := c.call(http.MethodPost, path, b, 30*time.Second)
 	if err != nil {
-		return Status{}, errDaemonDown
+		return Status{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		var e struct {
-			Error string `json:"error"`
-		}
-		json.NewDecoder(resp.Body).Decode(&e)
-		if e.Error == "" {
-			e.Error = resp.Status
-		}
-		return Status{}, fmt.Errorf("%s", e.Error)
+	if err := apiError(resp); err != nil {
+		return Status{}, err
 	}
 	var st Status
 	return st, json.NewDecoder(resp.Body).Decode(&st)
 }
 
-var errDaemonDown = fmt.Errorf("tsmux daemon is not running (start it with `tsmux up`)")
+// call sends one request to the daemon with the install's token. A missing
+// token file is not fatal here: the daemon's 401 says more than "no such file".
+func (c *Config) call(method, path string, body []byte, timeout time.Duration) (*http.Response, error) {
+	tok, err := readToken(c.TokenPath())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	req, err := http.NewRequest(method, "http://"+c.Router.PACListen+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	setToken(req, tok)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return nil, ErrDaemonDown
+	}
+	return resp, nil
+}
+
+func apiError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&e)
+	if e.Error == "" {
+		e.Error = resp.Status
+	}
+	return fmt.Errorf("%s", e.Error)
+}
+
+// ErrDaemonDown means nothing answered on the API port. Any other client
+// error, a 401 included, means a daemon may well be running.
+var ErrDaemonDown = errors.New("tsmux daemon is not running (start it with `tsmux up`)")
 
 // FetchStatus reads the running daemon's status, or reports that it is down.
 func (c *Config) FetchStatus() ([]Status, error) {
-	cl := &http.Client{Timeout: 3 * time.Second}
-	resp, err := cl.Get(c.StatusURL())
+	resp, err := c.call(http.MethodGet, "/status", nil, 3*time.Second)
 	if err != nil {
-		return nil, errDaemonDown
+		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := apiError(resp); err != nil {
+		return nil, err
+	}
 	var out []Status
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// RefuseIfRunning errors when a daemon may be holding profile's state dir.
+// Only a daemon that is plainly down counts as safe: a 401 from one the CLI
+// cannot authenticate to is still a live node.
+func (c *Config) RefuseIfRunning(profile string) error {
+	live, err := c.FetchStatus()
+	if errors.Is(err, ErrDaemonDown) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the daemon is using profile %q: %w", profile, err)
+	}
+	for _, s := range live {
+		if s.Profile == profile {
+			return fmt.Errorf("profile %q is running; stop the daemon first (tsmux up is holding it)", profile)
+		}
+	}
+	return nil
 }
 
 // --- system proxy -----------------------------------------------------------

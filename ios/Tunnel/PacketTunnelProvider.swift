@@ -16,6 +16,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     guard
       let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
     else { throw TunnelError(message: "app group container is missing") }
+    try prepareStateDirectory(in: dir)
     if let err = dir.path.withCString({ TSMuxStart(UnsafeMutablePointer(mutating: $0)) }) {
       defer { TSMuxFree(err) }
       throw TunnelError(message: String(cString: err))
@@ -62,7 +63,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     proxy.autoProxyConfigurationEnabled = true
     proxy.proxyAutoConfigurationJavaScript = pac
     // With no routes claimed, iOS ignores proxy settings unless matchDomains
-    // is set; "" is a suffix of every host, and the PAC sends the rest DIRECT.
+    // is set; "" is a suffix of every host, and the PAC sends the rest DIRECT
+    // or, with an exit node in use, to that tailnet's proxy.
     // https://developer.apple.com/forums/thread/822733
     proxy.matchDomains = [""]
     settings.proxySettings = proxy

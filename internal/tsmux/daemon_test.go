@@ -84,7 +84,7 @@ func TestPersistSuffix(t *testing.T) {
 }
 
 func TestGuard(t *testing.T) {
-	h := tempConfig(t, twoProfiles).LocalHandler(NewManager(Default(), false))
+	h := tempConfig(t, twoProfiles).LocalHandler(NewManager(Default(), false), testToken)
 	for _, tc := range []struct {
 		name, method, path, host, origin string
 		want                             int
@@ -97,6 +97,7 @@ func TestGuard(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(tc.method, "http://"+tc.host+tc.path, nil)
 			r.Host = tc.host
+			setToken(r, testToken)
 			if tc.origin != "" {
 				r.Header.Set("Origin", tc.origin)
 			}

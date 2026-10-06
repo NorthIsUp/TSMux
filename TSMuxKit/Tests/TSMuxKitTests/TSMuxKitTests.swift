@@ -22,15 +22,93 @@ import Testing
     #expect(s.condition == .needsApproval)
   }
 
+  private func lockStatus(state: String = "Running", lock: String) throws -> ProfileStatus {
+    let json =
+      #"{"profile":"work","display_name":"Work","state":"\#(state)","tailnet_lock":\#(lock)}"#
+    return try JSONDecoder().decode(ProfileStatus.self, from: Data(json.utf8))
+  }
+
+  @Test func decodesTailnetLock() throws {
+    let s = try lockStatus(
+      lock: #"""
+        {"enabled":true,"signed":false,"locked_out":true,"node_key":"nodekey:ab",
+         "public_key":"tlpub:cd","sign_command":"tailscale lock sign nodekey:ab tlpub:cd"}
+        """#)
+    let tl = try #require(s.tailnetLock)
+    #expect(tl.enabled && !tl.signed && tl.lockedOut)
+    #expect(tl.nodeKey == "nodekey:ab")
+    #expect(tl.publicKey == "tlpub:cd")
+    #expect(tl.signCommand == "tailscale lock sign nodekey:ab tlpub:cd")
+  }
+
+  @Test func absentTailnetLockDecodesAsNil() throws {
+    #expect(try fixture().first?.tailnetLock == nil)
+  }
+
+  @Test(arguments: [
+    (
+      "Running", #"{"enabled":true,"signed":false,"locked_out":true}"#,
+      ProfileStatus.Condition.lockedOut, true
+    ),
+    ("Running", #"{"enabled":true,"signed":true,"locked_out":false}"#, .running, true),
+    ("Running", #"{"enabled":false,"signed":false,"locked_out":false}"#, .running, true),
+    ("Stopped", #"{"enabled":true,"signed":false,"locked_out":true}"#, .stopped, false),
+  ])
+  func lockedOutIsNotConnected(
+    state: String, lock: String, want: ProfileStatus.Condition, up: Bool
+  ) throws {
+    let s = try lockStatus(state: state, lock: lock)
+    #expect(s.condition == want)
+    #expect(s.isUp == up)
+  }
+
+  @Test func onlyRunningAndLockedOutAreUp() {
+    let up = ProfileStatus.Condition.allCases.filter(\.isUp)
+    #expect(Set(up) == [.running, .lockedOut])
+  }
+
   @Test func groupsPeopleBeforeTagsOnlineFirst() throws {
     let groups = deviceGroups(try #require(try fixture().first?.devices))
     #expect(groups.map(\.name) == ["user@example.com", "tag:server"])
     #expect(groups[0].devices.map(\.shortName) == ["laptop", "phone"])
   }
 
+  // (this profile, its exit node pick, exit_profile, expected override)
+  @Test(
+    arguments: [
+      ("home", "n1", "work", "Work"),
+      ("work", "n2", "work", nil),
+      ("home", "", "work", nil),
+      ("home", "n1", "", nil),
+    ] as [(String, String, String, String?)])
+  func exitNodeOverride(profile: String, pick: String, winner: String, want: String?) throws {
+    func status(_ name: String, _ display: String, _ exitNode: String) throws -> ProfileStatus {
+      let json = """
+        {"profile":"\(name)","display_name":"\(display)","state":"Running",
+         "exit_profile":"\(winner)",
+         "prefs":{"connected":true,"accept_routes":false,"accept_dns":true,
+                  "shields_up":false,"exit_node":"\(exitNode)","exit_node_allow_lan":false}}
+        """
+      return try JSONDecoder().decode(ProfileStatus.self, from: Data(json.utf8))
+    }
+    let all = [
+      try status("home", "Home", profile == "home" ? pick : ""),
+      try status("work", "Work", profile == "work" ? pick : "n2"),
+    ]
+    let me = try #require(all.first { $0.profile == profile })
+    #expect(me.exitNodeOverride(among: all) == want)
+  }
+
   @Test func errorBodiesThrowTheirMessage() {
     let r = TunnelResponse(code: 400, body: #"{"error":"no profile \"x\""}"#)
     #expect(throws: TunnelError(message: #"no profile "x""#)) { try r.decode([ProfileStatus].self) }
+  }
+
+  @Test func removeCarriesLogoutWarning() throws {
+    let warned = TunnelResponse(code: 200, body: #"{"ok":true,"warning":"could not log out"}"#)
+    #expect(try warned.decode(ProfileEditResult.self).warning == "could not log out")
+    let clean = TunnelResponse(code: 200, body: #"{"ok":true}"#)
+    #expect(try clean.decode(ProfileEditResult.self) == ProfileEditResult(ok: true, warning: nil))
   }
 
   @Test func prefsBodyOmitsUnsetFields() throws {
@@ -79,6 +157,12 @@ import Testing
     #expect(AddFlow.step(try status("NeedsMachineAuth")) == .needsApproval(admin: nil))
     let up = try status("Running", extra: #","tailnet":"askclara.com""#)
     #expect(AddFlow.step(up) == .signedIn(suggestedName: "Askclara"))
+    let locked = try status(
+      "Running",
+      extra:
+        #","tailnet":"askclara.com","tailnet_lock":{"enabled":true,"signed":false,"locked_out":true}"#
+    )
+    #expect(AddFlow.step(locked) == .signedIn(suggestedName: "Askclara"))
   }
 
   @Test func opensEachLinkOnce() {

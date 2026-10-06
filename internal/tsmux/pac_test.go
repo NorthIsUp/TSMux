@@ -1,6 +1,7 @@
 package tsmux
 
 import (
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -143,5 +144,179 @@ func TestPACPicksUpLearnedSuffix(t *testing.T) {
 	got := runPAC(t, c, []string{"nas.tailnet-ab.ts.net"})
 	if want := "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"; got[0] != want {
 		t.Errorf("got %q, want %q", got[0], want)
+	}
+}
+
+// Learned split-DNS domains and subnet routes reach the browser, with the
+// same longest-match precedence the router uses even when the less specific
+// claim belongs to a profile that sorts first.
+func TestPACLearnedDomainsAndRoutes(t *testing.T) {
+	c := pacCfg(t)
+	pfx := netip.MustParsePrefix
+	c.setLearned("corp", []string{".example.com"}, []netip.Prefix{pfx("10.0.0.0/8"), pfx("fd7a:1::/48")})
+	c.setLearned("home", []string{".git.example.com"}, []netip.Prefix{pfx("10.1.0.0/16")})
+	const (
+		corp = "PROXY 127.0.0.1:43110; SOCKS5 127.0.0.1:43111"
+		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
+	)
+	cases := []struct{ host, want string }{
+		{"wiki.example.com", corp},
+		{"example.com", corp},
+		{"src.git.example.com", home},
+		{"10.9.9.9", corp},
+		{"10.1.2.3", home},
+		{"11.0.0.1", "DIRECT"},
+		{"notexample.com", "DIRECT"},
+	}
+	hosts := make([]string, len(cases))
+	for i, tc := range cases {
+		hosts[i] = tc.host
+	}
+	got := runPAC(t, c, hosts)
+	for i, tc := range cases {
+		if got[i] != tc.want {
+			t.Errorf("%s -> %q, want %q", tc.host, got[i], tc.want)
+		}
+		if tc.want == "DIRECT" {
+			continue
+		}
+		m, err := c.Route(tc.host)
+		if err != nil || !strings.Contains(tc.want, strconv.Itoa(m.Profile.HTTPPort)) {
+			t.Errorf("%s: PAC says %q, Route says %v %v", tc.host, got[i], m, err)
+		}
+	}
+	// isInNet resolves names, so it may only ever run behind the IP test, and
+	// IPv6 routes have no PAC form at all.
+	pac := c.PAC()
+	for _, line := range strings.Split(pac, "\n") {
+		if strings.Contains(line, "isInNet(") && !strings.Contains(line, "tsmuxIsIP &&") {
+			t.Errorf("unguarded isInNet: %s", line)
+		}
+	}
+	if strings.Contains(pac, "fd7a") {
+		t.Error("IPv6 route leaked into the PAC")
+	}
+
+	c.setLearned("corp", nil, nil)
+	if got := runPAC(t, c, []string{"wiki.example.com", "10.9.9.9"}); got[0] != "DIRECT" || got[1] != "DIRECT" {
+		t.Errorf("forgotten claims still proxied: %v", got)
+	}
+}
+
+// With an exit node in use, public traffic has to reach that profile's proxy,
+// or the exit node the user picked carries nothing.
+func TestPACExitNode(t *testing.T) {
+	const (
+		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
+		work = "PROXY 127.0.0.1:43130; SOCKS5 127.0.0.1:43131"
+	)
+	for _, tc := range []struct {
+		name  string
+		route ExitRoute
+		cases map[string]string
+	}{
+		{"none", ExitRoute{}, map[string]string{
+			"example.com": "DIRECT", "1.1.1.1": "DIRECT", "192.168.1.1": "DIRECT",
+		}},
+		{"home", ExitRoute{Profile: "home"}, map[string]string{
+			"example.com":       home,
+			"1.1.1.1":           home,
+			"192.168.1.1":       home, // no LAN access: the LAN goes out the exit node too
+			"box.work.ts.net":   work, // tailnet names still go to their own tailnet
+			"laptop":            work, // match_root still wins
+			"100.64.1.5":        work,
+			"localhost":         "DIRECT",
+			"127.0.0.1":         "DIRECT",
+			"printer.local":     "DIRECT",
+			"0.0.0.0":           "DIRECT",
+			"169.254.1.1":       "DIRECT",
+			"100.100.1.1":       "DIRECT", // unclaimed Tailscale address: no single tailnet owns it
+			"::1":               "DIRECT",
+			"[::1]":             "DIRECT",
+			"fe80::1":           "DIRECT",
+			"fd7a:115c:a1e0::5": "DIRECT",
+			"::ffff:127.0.0.1":  "DIRECT",
+			"2606:4700::1111":   home,
+			"fd00::1":           home,
+		}},
+		{"home allow LAN", ExitRoute{Profile: "home", AllowLAN: true}, map[string]string{
+			"example.com":     home,
+			"1.1.1.1":         home,
+			"192.168.1.1":     "DIRECT",
+			"10.1.2.3":        "DIRECT",
+			"172.20.0.1":      "DIRECT",
+			"172.32.0.1":      home,
+			"100.64.1.5":      work,
+			"fd00::1":         "DIRECT",
+			"2606:4700::1111": home,
+		}},
+		{"removed profile", ExitRoute{Profile: "gone"}, map[string]string{
+			"example.com": "DIRECT",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := pacCfg(t)
+			c.SetExitRoute(tc.route)
+			hosts := make([]string, 0, len(tc.cases))
+			for h := range tc.cases {
+				hosts = append(hosts, h)
+			}
+			got := runPAC(t, c, hosts)
+			for i, h := range hosts {
+				if want := tc.cases[h]; got[i] != want {
+					t.Errorf("%s -> %q, want %q", h, got[i], want)
+				}
+				m, err := c.Route(h)
+				if got[i] == "DIRECT" {
+					if err == nil && strings.HasSuffix(m.Reason, "exit node") {
+						t.Errorf("%s: PAC sends it DIRECT but Route sends it to the exit node", h)
+					}
+					continue
+				}
+				if err != nil {
+					t.Errorf("%s: PAC proxies it but Route refuses: %v", h, err)
+					continue
+				}
+				if !strings.Contains(got[i], strconv.Itoa(m.Profile.HTTPPort)) {
+					t.Errorf("%s: PAC says %q, Route says %s", h, got[i], m.Profile.Name)
+				}
+			}
+		})
+	}
+}
+
+// A learned split-DNS domain or subnet route still beats the exit node, which
+// only gets what no tailnet claims, and allow-LAN does not pull a learned
+// private subnet off its tailnet.
+func TestPACLearnedBeatsExitNode(t *testing.T) {
+	const (
+		corp = "PROXY 127.0.0.1:43110; SOCKS5 127.0.0.1:43111"
+		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
+	)
+	for _, lan := range []bool{false, true} {
+		c := pacCfg(t)
+		c.setLearned("corp", []string{".example.com"}, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+		c.SetExitRoute(ExitRoute{Profile: "home", AllowLAN: lan})
+		cases := []struct{ host, want string }{
+			{"wiki.example.com", corp},
+			{"example.com", corp},
+			{"10.9.9.9", corp},
+			{"notexample.com", home},
+			{"11.0.0.1", home},
+		}
+		hosts := make([]string, len(cases))
+		for i, tc := range cases {
+			hosts[i] = tc.host
+		}
+		got := runPAC(t, c, hosts)
+		for i, tc := range cases {
+			if got[i] != tc.want {
+				t.Errorf("allowLAN=%v: %s -> %q, want %q", lan, tc.host, got[i], tc.want)
+			}
+			m, err := c.Route(tc.host)
+			if err != nil || !strings.Contains(tc.want, strconv.Itoa(m.Profile.HTTPPort)) {
+				t.Errorf("allowLAN=%v: %s: PAC says %q, Route says %v %v", lan, tc.host, got[i], m, err)
+			}
+		}
 	}
 }

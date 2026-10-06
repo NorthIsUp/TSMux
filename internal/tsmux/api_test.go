@@ -15,15 +15,19 @@ func post(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRec
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:43180"+path, strings.NewReader(body))
 	r.Host = "127.0.0.1:43180"
 	r.Header.Set("Content-Type", "application/json")
+	setToken(r, testToken)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
 }
 
+const testToken = "test-token"
+
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:43180"+path, nil)
 	r.Host = "127.0.0.1:43180"
+	setToken(r, testToken)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -31,7 +35,7 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 
 func TestStatusEndpoint(t *testing.T) {
 	cfg := tempConfig(t, twoProfiles)
-	w := get(t, cfg.LocalHandler(NewManager(cfg, false)), "/status")
+	w := get(t, cfg.LocalHandler(NewManager(cfg, false), testToken), "/status")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
@@ -55,7 +59,7 @@ func TestShutdownEndpoint(t *testing.T) {
 	// A daemon nobody wired a stop into (the CLI's one-shot commands) has to
 	// say so rather than pretend it is going away.
 	m := NewManager(cfg, false)
-	w := post(t, cfg.LocalHandler(m), "/shutdown", "")
+	w := post(t, cfg.LocalHandler(m, testToken), "/shutdown", "")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("no stop hook: status = %d, want 503", w.Code)
 	}
@@ -65,7 +69,7 @@ func TestShutdownEndpoint(t *testing.T) {
 
 	stopped := make(chan struct{})
 	m.OnStop(func() { close(stopped) })
-	w = post(t, cfg.LocalHandler(m), "/shutdown", "")
+	w = post(t, cfg.LocalHandler(m, testToken), "/shutdown", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -81,7 +85,7 @@ func TestShutdownEndpoint(t *testing.T) {
 
 func TestPrefsEndpointErrors(t *testing.T) {
 	cfg := tempConfig(t, twoProfiles)
-	h := cfg.LocalHandler(NewManager(cfg, false))
+	h := cfg.LocalHandler(NewManager(cfg, false), testToken)
 	for _, tc := range []struct {
 		name, path, body string
 		want             int
@@ -107,7 +111,7 @@ func TestPrefsEndpointErrors(t *testing.T) {
 
 func TestGuardRejectsCrossSiteWrites(t *testing.T) {
 	cfg := tempConfig(t, twoProfiles)
-	h := cfg.LocalHandler(NewManager(cfg, false))
+	h := cfg.LocalHandler(NewManager(cfg, false), testToken)
 	for _, tc := range []struct {
 		name, ctype, fetchSite string
 		want                   int
@@ -120,6 +124,7 @@ func TestGuardRejectsCrossSiteWrites(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:43180/prefs", strings.NewReader("{"))
 			r.Host = "127.0.0.1:43180"
+			setToken(r, testToken)
 			if tc.ctype != "" {
 				r.Header.Set("Content-Type", tc.ctype)
 			}
@@ -161,6 +166,8 @@ func TestStatusJSONFieldNames(t *testing.T) {
 		Prefs:     &StatusPrefs{Connected: true},
 		ExitNodes: []ExitNodeOption{{ID: "n1", Name: "exit", Hostname: "exit", Online: true, Current: true}},
 		Devices:   []Device{{Name: "nas", Hostname: "nas", IPs: []string{"100.64.0.2"}, OS: "linux", Owner: "a@b.c", Tags: []string{"tag:srv"}, Online: true, ExitNode: true}},
+		TailnetLock: &TailnetLock{Enabled: true, LockedOut: true, NodeKey: "nodekey:1",
+			PublicKey: "tlpub:2", SignCommand: "tailscale lock sign nodekey:1 tlpub:2"},
 	}
 	var got map[string]any
 	b, err := json.Marshal(st)
@@ -173,7 +180,9 @@ func TestStatusJSONFieldNames(t *testing.T) {
 	wantKeys(t, "status", got, "profile", "display_name", "state", "self", "device_name",
 		"ips", "peers", "auth_url", "suffixes", "http_proxy", "socks5_proxy", "error",
 		"tailnet", "magic_dns_suffix", "suffix_conflict", "user", "key_expiry", "health",
-		"connected_since", "admin_url", "prefs", "exit_node_options", "devices")
+		"connected_since", "admin_url", "prefs", "exit_node_options", "devices", "tailnet_lock")
+	wantKeys(t, "tailnet_lock", got["tailnet_lock"], "enabled", "signed", "locked_out",
+		"node_key", "public_key", "sign_command")
 	wantKeys(t, "user", got["user"], "login_name", "display_name", "avatar_url")
 	wantKeys(t, "prefs", got["prefs"], "connected", "accept_routes", "accept_dns",
 		"shields_up", "exit_node", "exit_node_allow_lan")

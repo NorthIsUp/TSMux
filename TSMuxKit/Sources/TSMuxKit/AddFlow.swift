@@ -29,7 +29,8 @@ public struct AddFlow: Sendable {
   public static func step(_ p: ProfileStatus?) -> Step {
     guard let p else { return .connecting }
     switch p.condition {
-    case .running:
+    // A locked-out node has signed in; naming it doesn't need connectivity.
+    case .running, .lockedOut:
       return .signedIn(
         suggestedName: Slug.suggestedName(tailnet: p.tailnet, magicDNSSuffix: p.magicDNSSuffix))
     case .needsApproval: return .needsApproval(admin: p.adminURL.flatMap(URL.init(string:)))

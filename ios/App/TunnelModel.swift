@@ -50,7 +50,7 @@ final class TunnelModel {
 
   func setOn(_ on: Bool) async {
     guard on else {
-      manager?.connection.stopVPNTunnel()
+      await stop()
       return
     }
     do {
@@ -63,26 +63,62 @@ final class TunnelModel {
   /// Installs the VPN configuration on first use, which is when iOS asks the
   /// user to allow it, then starts the tunnel and waits for it to come up.
   private func start() async throws {
-    if isConnected { return }
+    // Disconnecting in Settings clears on-demand and Settings can delete the
+    // configuration; the manager loaded at launch shows neither.
+    manager = try await NETunnelProviderManager.loadAllFromPreferences().first
     let m = manager ?? NETunnelProviderManager()
-    if !m.isEnabled || m.protocolConfiguration == nil {
-      let proto = NETunnelProviderProtocol()
-      proto.providerBundleIdentifier = (Bundle.main.bundleIdentifier ?? "") + ".tunnel"
-      proto.serverAddress = "Every tailnet at once"
-      m.protocolConfiguration = proto
-      m.localizedDescription = "TSMux"
-      m.isEnabled = true
+    // Configurations saved before on-demand existed, and ones the user
+    // turned off, come through here too, even while connected: on-demand is
+    // what brings the extension back after iOS kills it.
+    if !m.isEnabled || m.protocolConfiguration == nil || !m.isOnDemandEnabled
+      || (m.onDemandRules ?? []).isEmpty
+    {
+      if !m.isEnabled || m.protocolConfiguration == nil {
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = (Bundle.main.bundleIdentifier ?? "") + ".tunnel"
+        proto.serverAddress = "Every tailnet at once"
+        m.protocolConfiguration = proto
+        m.localizedDescription = "TSMux"
+        m.isEnabled = true
+      }
+      let always = NEOnDemandRuleConnect()
+      always.interfaceTypeMatch = .any
+      m.onDemandRules = [always]
+      m.isOnDemandEnabled = true
       try await m.saveToPreferences()
       // A freshly saved configuration can't start until it is loaded back.
       try await m.loadFromPreferences()
       manager = m
     }
-    try m.connection.startVPNTunnel()
+    updateStatus()
+    if isConnected { return }
+    // Saving with on-demand on may already have started it.
+    if [.disconnected, .invalid].contains(m.connection.status) {
+      try m.connection.startVPNTunnel()
+    }
     for _ in 0..<60 where !isConnected {
       try await Task.sleep(for: .milliseconds(250))
       updateStatus()
     }
     guard isConnected else { throw TunnelError(message: "TSMux didn't connect. Try again.") }
+  }
+
+  /// On-demand goes off first: a tunnel stopped with it still on is
+  /// restarted by iOS straight away.
+  private func stop() async {
+    if let fresh = try? await NETunnelProviderManager.loadAllFromPreferences().first {
+      manager = fresh
+    }
+    guard let m = manager else { return }
+    if m.isOnDemandEnabled {
+      m.isOnDemandEnabled = false
+      do {
+        try await m.saveToPreferences()
+      } catch {
+        lastError = error.localizedDescription
+      }
+    }
+    m.connection.stopVPNTunnel()
   }
 
   private func send(_ req: TunnelRequest) async throws -> TunnelResponse {
@@ -160,7 +196,8 @@ final class TunnelModel {
 
   func remove(_ profile: String) async {
     await perform {
-      _ = try await send(.removeProfile(profile)).decode([String: Bool].self)
+      let result = try await send(.removeProfile(profile)).decode(ProfileEditResult.self)
+      if let warning = result.warning { lastError = warning }
       UNUserNotificationCenter.current().removePendingNotificationRequests(
         withIdentifiers: [expiryID(profile)])
       await refresh()

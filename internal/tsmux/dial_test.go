@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"testing"
 )
 
@@ -144,5 +145,52 @@ func TestDialV4FallbackStopsOnCancel(t *testing.T) {
 	}
 	if len(d.asked) != 2 { // the name, then one address before the cancel is seen
 		t.Errorf("dialed %v, want to stop after the first address", d.asked)
+	}
+}
+
+// A split-DNS name is never handed to tsnet's Dial, whose fallback for names
+// outside MagicDNS is the host's own resolver.
+func TestDialSplitDNS(t *testing.T) {
+	errDNS := errors.New("no resolver")
+	for _, tc := range []struct {
+		name     string
+		hostport string
+		ok       []string
+		a        []netip.Addr
+		aErr     error
+		wantConn bool
+		wantAsk  []string
+	}{
+		{
+			name:     "resolved in the tailnet, dialed by address",
+			hostport: "git.corp.example.com:443", ok: []string{"10.1.2.3:443"},
+			a: addrs("10.1.2.3"), wantConn: true, wantAsk: []string{"10.1.2.3:443"},
+		},
+		{
+			name:     "addresses tried in order",
+			hostport: "git.corp.example.com:443", ok: []string{"[fd7a:1::5]:443"},
+			a: addrs("10.1.2.3", "fd7a:1::5"), wantConn: true,
+			wantAsk: []string{"10.1.2.3:443", "[fd7a:1::5]:443"},
+		},
+		{name: "resolver error dials nothing", hostport: "git.corp.example.com:443", aErr: errDNS},
+		{name: "no answer dials nothing", hostport: "git.corp.example.com:443"},
+		{name: "no port", hostport: "git.corp.example.com", a: addrs("10.1.2.3")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &dialRecorder{ok: map[string]bool{}}
+			for _, a := range tc.ok {
+				d.ok[a] = true
+			}
+			conn, err := dialSplitDNS(context.Background(), tc.hostport, d.dial, lookup(tc.a, tc.aErr))
+			if conn != nil {
+				conn.Close()
+			}
+			if tc.wantConn != (err == nil) {
+				t.Fatalf("err = %v, wantConn %v", err, tc.wantConn)
+			}
+			if !slices.Equal(d.asked, tc.wantAsk) {
+				t.Errorf("dialed %v, want %v", d.asked, tc.wantAsk)
+			}
+		})
 	}
 }

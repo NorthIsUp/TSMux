@@ -94,6 +94,11 @@ type response struct {
 	Body string `json:"body"`
 }
 
+type editResult struct {
+	OK      bool   `json:"ok"`
+	Warning string `json:"warning,omitempty"`
+}
+
 type profileRequest struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name,omitempty"`
@@ -112,17 +117,21 @@ func call(raw []byte) response {
 		if err := json.Unmarshal([]byte(req.Body), &p); err != nil {
 			return errResponse(http.StatusBadRequest, err)
 		}
-		edit := addProfile
+		var warning string
+		var err error
 		switch req.Path {
+		case "/profiles/add":
+			err = addProfile(p)
 		case "/profiles/remove":
-			edit = removeProfile
+			warning, err = removeProfile(p)
 		case "/profiles/rename":
-			edit = renameProfile
+			err = renameProfile(p)
 		}
-		if err := edit(p); err != nil {
+		if err != nil {
 			return errResponse(http.StatusBadRequest, err)
 		}
-		return response{Code: http.StatusOK, Body: `{"ok":true}`}
+		b, _ := json.Marshal(editResult{OK: true, Warning: warning})
+		return response{Code: http.StatusOK, Body: string(b)}
 	}
 
 	mu.RLock()
@@ -135,7 +144,7 @@ func call(raw []byte) response {
 	r := httptest.NewRequest(req.Method, "http://127.0.0.1"+req.Path, strings.NewReader(req.Body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	cfg.LocalHandler(mgr).ServeHTTP(w, r)
+	cfg.InProcessHandler(mgr).ServeHTTP(w, r)
 	return response{Code: w.Code, Body: w.Body.String()}
 }
 
@@ -154,16 +163,43 @@ func addProfile(p profileRequest) error {
 	})
 }
 
-// removeProfile also deletes the saved credentials: on iOS nothing else can
-// reach the state dir to clean it up later.
-func removeProfile(p profileRequest) error {
-	return editConfig(func(c *tsmux.Config) error {
-		if _, ok := c.Profiles[p.Name]; !ok {
+// removeProfile also logs the node out and deletes the saved credentials: on
+// iOS nothing else can reach the state dir to clean it up later.
+func removeProfile(p profileRequest) (warning string, err error) {
+	live, liveErr := logoutLive(p.Name)
+	err = editConfig(func(c *tsmux.Config) error {
+		prof, ok := c.Profiles[p.Name]
+		if !ok {
 			return fmt.Errorf("no profile %q", p.Name)
 		}
 		delete(c.Profiles, p.Name)
-		return os.RemoveAll(c.StateDir(p.Name))
+		dir := c.StateDir(p.Name)
+		var rmErr error
+		warning, rmErr = tsmux.PurgeState(context.Background(), dir, func(ctx context.Context) error {
+			if live {
+				return liveErr
+			}
+			return tsmux.LogoutStopped(ctx, prof, dir)
+		})
+		return rmErr
 	})
+	if warning != "" {
+		log.Printf("[%s] %s", p.Name, warning)
+	}
+	return warning, err
+}
+
+// logoutLive logs a profile out through its running node, which editConfig is
+// about to stop. live is false when it has none and the logout is still owed.
+func logoutLive(name string) (live bool, err error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if mgr == nil {
+		return false, nil
+	}
+	ctx, cancelCtx := context.WithTimeout(context.Background(), tsmux.LogoutTimeout)
+	defer cancelCtx()
+	return mgr.LogoutRunning(ctx, name)
 }
 
 // renameProfile renames a tailnet after sign-in, when its real name is known.
@@ -232,7 +268,10 @@ func up() error {
 			return err
 		}
 	}
-	closer, err := tsmux.Serve(c, m)
+	// No PAC/API listener: the app reaches the API through TSMuxCall, and the
+	// tunnel hands iOS the PAC as script. On TCP loopback any other app could
+	// call it.
+	closer, err := tsmux.Serve(c, m, nil)
 	if err != nil {
 		cancelCtx()
 		m.Close()

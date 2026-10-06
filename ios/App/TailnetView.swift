@@ -1,5 +1,6 @@
 import SwiftUI
 import TSMuxKit
+import UIKit
 
 struct TailnetView: View {
   let profile: String
@@ -33,6 +34,19 @@ struct TailnetView: View {
         }
       }
 
+      if let lock = t.tailnetLock, lock.lockedOut {
+        lockedOut(lock)
+      }
+
+      if let health = t.healthMessages, !health.isEmpty {
+        Section("Health") {
+          ForEach(health, id: \.self) { h in
+            Label(h, systemImage: "exclamationmark.triangle.fill")
+              .foregroundStyle(.orange)
+          }
+        }
+      }
+
       Section {
         if let u = t.user { LabeledContent("Account", value: u.loginName) }
         if let n = t.tailnet { LabeledContent("Tailnet", value: n) }
@@ -58,6 +72,13 @@ struct TailnetView: View {
           toggle("Use tailnet DNS", prefs.acceptDNS) { $0.acceptDNS = $1 }
           toggle("Block incoming connections", prefs.shieldsUp) { $0.shieldsUp = $1 }
           exitNodePicker(t, prefs)
+          if let other = t.exitNodeOverride(among: model.tailnets) {
+            Text(
+              "Not in use: public traffic goes through \(other)'s exit node. Only one can be active."
+            )
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+          }
           if !prefs.exitNode.isEmpty {
             toggle("Allow local network access", prefs.exitNodeAllowLAN) {
               $0.exitNodeAllowLAN = $1
@@ -76,14 +97,14 @@ struct TailnetView: View {
         if let raw = t.adminURL, let url = URL(string: raw) {
           Link("Admin console", destination: url)
         }
-        if t.condition == .running {
+        if t.isUp {
           Button("Log out") { Task { await model.logout(profile) } }
         }
         Button("Remove tailnet", role: .destructive) { confirmRemove = true }
       }
     }
     .signInSheet($signIn)
-    .onChange(of: t.condition) { _, c in if c == .running { signIn = nil } }
+    .onChange(of: t.condition) { _, c in if c.isUp { signIn = nil } }
     .confirmationDialog(
       "Remove \(t.name)?", isPresented: $confirmRemove, titleVisibility: .visible
     ) {
@@ -95,6 +116,36 @@ struct TailnetView: View {
       }
     } message: {
       Text("This device leaves the tailnet and its sign-in is deleted.")
+    }
+  }
+
+  private func lockedOut(_ lock: TailnetLock) -> some View {
+    Section {
+      if let k = lock.nodeKey { keyRow("Node key", k) }
+      if let k = lock.publicKey { keyRow("Tailnet-lock key", k) }
+      if let cmd = lock.signCommand { keyRow("Sign command", cmd) }
+    } header: {
+      Label("Needs tailnet-lock signature", systemImage: "lock.circle.fill")
+        .foregroundStyle(.orange)
+    } footer: {
+      Text(
+        "Signed in, but tailnet lock hides every device until an admin runs the sign "
+          + "command on a device with a trusted tailnet-lock key.")
+    }
+  }
+
+  private func keyRow(_ title: String, _ value: String) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title).font(.caption).foregroundStyle(.secondary)
+      HStack {
+        Text(value)
+          .font(.system(.footnote, design: .monospaced))
+          .textSelection(.enabled)
+        Spacer()
+        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = value }
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderless)
+      }
     }
   }
 
