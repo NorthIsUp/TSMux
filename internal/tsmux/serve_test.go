@@ -26,7 +26,7 @@ func TestServeReportsBusyPort(t *testing.T) {
 	if err := c.Normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Serve(c, NewManager(c, false)); err == nil {
+	if _, err := Serve(c, NewManager(c, false), nil); err == nil {
 		t.Fatal("Serve succeeded on a busy port")
 	}
 	ln, err := net.Listen("tcp", freeAddr)
