@@ -185,6 +185,13 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 	if err != nil {
 		return fmt.Errorf("profile %s: %w", p.Name, err)
 	}
+	// Only once the lock is held: walking a dir another instance's tsnet is
+	// renaming temp files through fails on the vanished temp file, and that
+	// error would hide the "already running" one.
+	if err := protectStateDir(filepath.Dir(dir), dir); err != nil {
+		lock.Close()
+		return fmt.Errorf("profile %s: protect state dir: %w", p.Name, err)
+	}
 	srv := &tsnet.Server{
 		Dir:        dir,
 		Hostname:   p.Hostname,
