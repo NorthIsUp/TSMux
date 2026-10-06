@@ -152,6 +152,9 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	if err := protectStateDir(filepath.Dir(dir), dir); err != nil {
+		return fmt.Errorf("profile %s: protect state dir: %w", p.Name, err)
+	}
 	// Two tsnet servers on one state dir clobber each other's credentials: the
 	// second writes prefs with an empty Persist over the first's node key, and
 	// the profile silently reverts to needing a login. Hold the dir exclusively.

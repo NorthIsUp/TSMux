@@ -16,6 +16,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     guard
       let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
     else { throw TunnelError(message: "app group container is missing") }
+    try prepareStateDirectory(in: dir)
     if let err = dir.path.withCString({ TSMuxStart(UnsafeMutablePointer(mutating: $0)) }) {
       defer { TSMuxFree(err) }
       throw TunnelError(message: String(cString: err))
