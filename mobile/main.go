@@ -167,40 +167,9 @@ func removeProfile(p profileRequest) error {
 }
 
 // renameProfile renames a tailnet after sign-in, when its real name is known.
-// The state dir moves with the key, so the node keeps its login.
 func renameProfile(p profileRequest) error {
 	return editConfig(func(c *tsmux.Config) error {
-		prof, ok := c.Profiles[p.Name]
-		if !ok {
-			return fmt.Errorf("no profile %q", p.Name)
-		}
-		if p.DisplayName != "" {
-			prof.DisplayName = p.DisplayName
-		}
-		if p.NewName == "" || p.NewName == p.Name {
-			return nil
-		}
-		if _, ok := c.Profiles[p.NewName]; ok {
-			return fmt.Errorf("profile %q already exists", p.NewName)
-		}
-		// A device name that was only derived from the old key follows the new one.
-		if prof.Hostname == c.Router.ProfileHostnameBase+"-"+p.Name {
-			prof.Hostname = ""
-		}
-		for _, t := range c.Tunnels {
-			if t.Profile == p.Name {
-				t.Profile = p.NewName
-			}
-		}
-		if err := os.MkdirAll(filepath.Dir(c.StateDir(p.NewName)), 0o700); err != nil {
-			return err
-		}
-		if err := os.Rename(c.StateDir(p.Name), c.StateDir(p.NewName)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		delete(c.Profiles, p.Name)
-		c.Profiles[p.NewName] = prof
-		return nil
+		return c.RenameProfile(p.Name, p.NewName, p.DisplayName)
 	})
 }
 

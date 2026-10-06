@@ -1,7 +1,9 @@
 package tsmux
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/netip"
 	"net/url"
@@ -366,6 +368,46 @@ func (c *Config) addSuffix(name, suffix string) {
 		return
 	}
 	p.Suffixes = append(p.Suffixes, suffix)
+}
+
+// RenameProfile moves a profile to a new key, taking its saved login with it,
+// and optionally sets its display name. Callers stop its node first and save
+// the config after.
+func (c *Config) RenameProfile(old, newName, display string) error {
+	p, ok := c.Profiles[old]
+	if !ok {
+		return fmt.Errorf("no profile %q", old)
+	}
+	if display != "" {
+		p.DisplayName = display
+	}
+	if newName == "" || newName == old {
+		return nil
+	}
+	if !nameRE.MatchString(newName) {
+		return fmt.Errorf("profile %q: name must be lowercase alphanumeric with dashes", newName)
+	}
+	if _, ok := c.Profiles[newName]; ok {
+		return fmt.Errorf("profile %q already exists", newName)
+	}
+	// A device name that was only derived from the old key follows the new one.
+	if p.Hostname == c.Router.ProfileHostnameBase+"-"+old {
+		p.Hostname = ""
+	}
+	for _, t := range c.Tunnels {
+		if t.Profile == old {
+			t.Profile = newName
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(c.StateDir(newName)), 0o700); err != nil {
+		return err
+	}
+	if err := os.Rename(c.StateDir(old), c.StateDir(newName)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	delete(c.Profiles, old)
+	c.Profiles[newName] = p
+	return nil
 }
 
 func (c *Config) StateDir(profile string) string {

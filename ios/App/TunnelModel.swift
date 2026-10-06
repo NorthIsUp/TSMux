@@ -139,10 +139,9 @@ final class TunnelModel {
   /// isn't. Its real name is only known after sign-in; see `rename`.
   func add(controlURL: String) async throws -> String {
     try await start()
-    var key = "new"
-    while tailnet(key) != nil { key = Slug.bump(key) }
+    let key = AddFlow.placeholderKey { tailnet($0) != nil }
     _ = try await send(
-      .addProfile(name: key, displayName: "New tailnet", controlURL: controlURL)
+      .addProfile(name: key, displayName: AddFlow.placeholderName, controlURL: controlURL)
     ).decode([String: Bool].self)
     await refresh()
     return key

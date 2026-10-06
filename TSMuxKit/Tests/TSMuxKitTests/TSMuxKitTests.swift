@@ -64,3 +64,36 @@ import Testing
     #expect(Slug.suggestedName(tailnet: nil, magicDNSSuffix: nil) == "")
   }
 }
+
+@Suite struct AddFlowTests {
+  private func status(_ state: String, extra: String = "") throws -> ProfileStatus {
+    let json = #"{"profile":"new","display_name":"New tailnet","state":"\#(state)"\#(extra)}"#
+    return try JSONDecoder().decode(ProfileStatus.self, from: Data(json.utf8))
+  }
+
+  @Test func walksSignInToNaming() throws {
+    #expect(AddFlow.step(nil) == .connecting)
+    #expect(AddFlow.step(try status("NeedsLogin")) == .waitingForLink)
+    let link = try status("NeedsLogin", extra: #","auth_url":"https://login.example/a""#)
+    #expect(AddFlow.step(link) == .signIn(URL(string: "https://login.example/a")!))
+    #expect(AddFlow.step(try status("NeedsMachineAuth")) == .needsApproval(admin: nil))
+    let up = try status("Running", extra: #","tailnet":"askclara.com""#)
+    #expect(AddFlow.step(up) == .signedIn(suggestedName: "Askclara"))
+  }
+
+  @Test func opensEachLinkOnce() {
+    var flow = AddFlow()
+    let a = AddFlow.Step.signIn(URL(string: "https://login.example/a")!)
+    let b = AddFlow.Step.signIn(URL(string: "https://login.example/b")!)
+    #expect(!flow.signInStarted)
+    #expect(flow.autoOpen(a) != nil)
+    #expect(flow.autoOpen(a) == nil)
+    #expect(flow.autoOpen(b) != nil)
+    #expect(flow.signInStarted)
+  }
+
+  @Test func placeholderSkipsTakenKeys() {
+    #expect(AddFlow.placeholderKey { _ in false } == "new")
+    #expect(AddFlow.placeholderKey { ["new", "new-2"].contains($0) } == "new-3")
+  }
+}
