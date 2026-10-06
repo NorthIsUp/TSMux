@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TSMuxKit
 
 @main
 struct TSMuxApp: App {

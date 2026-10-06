@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Build the Go core as ios/Frameworks/TSMuxCore.xcframework"
+#MISE sources=["go.mod", "go.sum", "mobile/**/*.go", "internal/**/*.go"]
+#MISE outputs=["ios/Frameworks/TSMuxCore.xcframework/Info.plist"]
+set -euo pipefail
+
+./scripts/build-ios-core.sh

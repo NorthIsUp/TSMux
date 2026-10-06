@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TSMuxKit
 
 struct RemoveTailnetSheet: View {
   let model: AppModel

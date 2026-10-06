@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Archive, sign and upload TSMux for iOS to TestFlight (--no-upload to export only)"
+set -euo pipefail
+
+./scripts/ios-testflight.sh "$@"

@@ -1,0 +1,122 @@
+import SwiftUI
+import TSMuxKit
+
+struct TailnetView: View {
+  let profile: String
+  @Environment(TunnelModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
+  @State private var confirmRemove = false
+
+  var body: some View {
+    if let t = model.tailnet(profile) {
+      form(t).navigationTitle(t.name)
+    } else {
+      ContentUnavailableView("Tailnet not running", systemImage: "network.slash")
+    }
+  }
+
+  private func form(_ t: ProfileStatus) -> some View {
+    Form {
+      if t.condition == .needsLogin, let raw = t.authURL, let url = URL(string: raw) {
+        Section {
+          Link(destination: url) { Label("Sign in to \(t.name)", systemImage: "person.badge.key") }
+        } footer: {
+          Text("Sign in in Safari, then come back. This tailnet connects on its own.")
+        }
+      }
+
+      Section {
+        if let u = t.user { LabeledContent("Account", value: u.loginName) }
+        if let n = t.tailnet { LabeledContent("Tailnet", value: n) }
+        if let m = t.machineName {
+          LabeledContent("This device", value: m).textSelection(.enabled)
+        }
+        if let ip = t.ips?.first { LabeledContent("Address", value: ip).textSelection(.enabled) }
+        if let up = t.uptime { LabeledContent("Connected for", value: up) }
+        if let days = t.daysUntilExpiry {
+          LabeledContent("Key expires", value: days <= 0 ? "today" : "in \(days) days")
+        }
+        if let e = t.error, !e.isEmpty { Text(e).foregroundStyle(.red) }
+        if let c = t.suffixConflict, !c.isEmpty {
+          Text("Its DNS suffix is already routed to \(c), so its names go there.")
+            .foregroundStyle(.orange)
+        }
+      }
+
+      if let prefs = t.prefs {
+        Section("Settings") {
+          toggle("Connected", prefs.connected) { $0.connected = $1 }
+          toggle("Use subnet routes", prefs.acceptRoutes) { $0.acceptRoutes = $1 }
+          toggle("Use tailnet DNS", prefs.acceptDNS) { $0.acceptDNS = $1 }
+          toggle("Block incoming connections", prefs.shieldsUp) { $0.shieldsUp = $1 }
+          exitNodePicker(t, prefs)
+          if !prefs.exitNode.isEmpty {
+            toggle("Allow local network access", prefs.exitNodeAllowLAN) {
+              $0.exitNodeAllowLAN = $1
+            }
+          }
+        }
+      }
+
+      if let devices = t.devices, !devices.isEmpty {
+        Section {
+          NavigationLink("Devices (\(devices.count))") { DevicesView(profile: profile) }
+        }
+      }
+
+      Section {
+        if let raw = t.adminURL, let url = URL(string: raw) {
+          Link("Admin console", destination: url)
+        }
+        if t.condition == .running {
+          Button("Log out") { Task { await model.logout(profile) } }
+        }
+        Button("Remove tailnet", role: .destructive) { confirmRemove = true }
+      }
+    }
+    .confirmationDialog(
+      "Remove \(t.name)?", isPresented: $confirmRemove, titleVisibility: .visible
+    ) {
+      Button("Remove", role: .destructive) {
+        Task {
+          await model.remove(profile)
+          dismiss()
+        }
+      }
+    } message: {
+      Text("This device leaves the tailnet and its sign-in is deleted.")
+    }
+  }
+
+  private func toggle(
+    _ title: String, _ value: Bool, _ set: @escaping (inout PrefsChange, Bool) -> Void
+  ) -> some View {
+    Toggle(
+      title,
+      isOn: Binding(
+        get: { value },
+        set: { v in
+          var change = PrefsChange(profile: profile)
+          set(&change, v)
+          Task { await model.setPrefs(change) }
+        }))
+  }
+
+  private func exitNodePicker(_ t: ProfileStatus, _ prefs: ProfilePrefs) -> some View {
+    Picker(
+      "Exit node",
+      selection: Binding(
+        get: { prefs.exitNode },
+        set: { id in
+          var change = PrefsChange(profile: profile)
+          change.exitNode = id
+          Task { await model.setPrefs(change) }
+        })
+    ) {
+      Text("None").tag("")
+      ForEach(t.exitNodeOptions ?? []) { n in
+        Text(n.online ? n.hostname : "\(n.hostname) (offline)").tag(n.id)
+      }
+    }
+  }
+}

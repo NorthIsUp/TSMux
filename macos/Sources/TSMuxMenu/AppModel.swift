@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import TSMuxKit
 
 // ponytail: one shared AppModel, no view-model-per-tab.
 

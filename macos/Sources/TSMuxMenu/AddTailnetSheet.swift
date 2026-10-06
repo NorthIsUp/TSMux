@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TSMuxKit
 
 /// Three panes in one frame. The whole point of the flow: the user types a
 /// name and nothing else — the DNS suffix is a result at the end, never input.

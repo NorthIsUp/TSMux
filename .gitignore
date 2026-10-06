@@ -1,2 +1,10 @@
 bin/
 macos/.build/
+TSMuxKit/.build/
+ios/TSMux.xcodeproj/
+ios/Frameworks/
+ios/App/TSMux.entitlements
+ios/Tunnel/TSMuxTunnel.entitlements
+ios/Tunnel/Info.plist
+ios/.build/
+ios/build/

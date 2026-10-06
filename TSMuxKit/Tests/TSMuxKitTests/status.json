@@ -1,0 +1,70 @@
+[
+ {
+  "profile": "home",
+  "display_name": "Home",
+  "state": "Running",
+  "self": "tsmux-home.example.ts.net.",
+  "device_name": "tsmux-home",
+  "ips": [
+   "100.64.0.1"
+  ],
+  "peers": 3,
+  "suffixes": [
+   ".example.ts.net"
+  ],
+  "http_proxy": "127.0.0.1:43110",
+  "socks5_proxy": "127.0.0.1:43111",
+  "tailnet": "example.com",
+  "magic_dns_suffix": "example.ts.net",
+  "user": {
+   "login_name": "user@example.com",
+   "display_name": "User"
+  },
+  "key_expiry": "2027-03-13T23:28:03Z",
+  "connected_since": "2026-10-01T09:35:16.966624-07:00",
+  "admin_url": "https://login.tailscale.com/admin/machines",
+  "prefs": {
+   "connected": true,
+   "accept_routes": false,
+   "accept_dns": true,
+   "shields_up": false,
+   "exit_node": "",
+   "exit_node_allow_lan": false
+  },
+  "exit_node_options": [],
+  "devices": [
+   {
+    "name": "nas.example.ts.net",
+    "hostname": "nas",
+    "ips": [
+     "100.64.0.2"
+    ],
+    "os": "linux",
+    "tags": [
+     "tag:server"
+    ],
+    "online": true
+   },
+   {
+    "name": "phone.example.ts.net",
+    "hostname": "phone",
+    "ips": [
+     "100.64.0.3"
+    ],
+    "os": "iOS",
+    "owner": "user@example.com",
+    "online": false
+   },
+   {
+    "name": "laptop.example.ts.net",
+    "hostname": "laptop",
+    "ips": [
+     "100.64.0.4"
+    ],
+    "os": "macOS",
+    "owner": "user@example.com",
+    "online": true
+   }
+  ]
+ }
+]

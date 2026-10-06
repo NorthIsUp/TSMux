@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TSMuxKit
 
 /// Shown in the detail pane when there is nothing to list. The sidebar hides
 /// its Tailnets section entirely rather than showing an empty one.

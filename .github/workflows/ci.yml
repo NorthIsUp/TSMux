@@ -43,6 +43,14 @@ jobs:
         working-directory: macos
         run: swift build -c release
 
+      # The iOS app: shared Swift models, then an unsigned device build of the
+      # app and its tunnel extension around the Go core.
+      - name: ios build
+        if: runner.os == 'macOS'
+        run: |
+          swift test --package-path TSMuxKit
+          mise run ios:build
+
       # Everything the steps above don't cover (swift-format, actionlint, pkl,
       # trailing whitespace). macOS only: swift-format ships with Xcode.
       - name: hk check
