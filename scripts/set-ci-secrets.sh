@@ -31,6 +31,27 @@ base64 -i "$team_dir/devid.p12" | gh secret set DEVID_P12 --repo "$repo"
 # build users have to install by hand; leaking it means someone else can.
 gh secret set SPARKLE_ED_KEY --repo "$repo" < "$sparkle_key"
 
+# iOS: the team's Apple Distribution p12 lives in its bundled 1Password item
+# (read in one session, by id: op:// splits labels on dots); the two App Store
+# profiles are per app and come from make_profile.py's output on disk.
+op_account="${OP_ACCOUNT:-mony-hitchcock}"
+op_item="${OP_ITEM:-hoo5lzo6l6sotm77acfcnojg5q}"
+op_p12_file="${OP_P12_FILE:-cyhrdaeqyz22dm2yfndqlwst7i}"
+ios_dir="${IOS_DIR:-$HOME/.appstoreconnect/tsmux}"
+for f in "$ios_dir/app.mobileprovision" "$ios_dir/tunnel.mobileprovision"; do
+  [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
+done
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+chmod 700 "$tmp"
+op item get "$op_item" --vault Private --account "$op_account" --reveal --format json > "$tmp/item.json"
+op read --account "$op_account" --out-file "$tmp/dist.p12" "op://Private/$op_item/$op_p12_file" >/dev/null
+jq -er '.fields[] | select(.label == "Distribution p12 password") | .value' "$tmp/item.json" \
+  | tr -d '\n' | gh secret set DIST_P12_PASSWORD --repo "$repo"
+base64 -i "$tmp/dist.p12" | gh secret set DIST_P12_BASE64 --repo "$repo"
+base64 -i "$ios_dir/app.mobileprovision" | gh secret set APP_PROFILE_BASE64 --repo "$repo"
+base64 -i "$ios_dir/tunnel.mobileprovision" | gh secret set TUNNEL_PROFILE_BASE64 --repo "$repo"
+
 # The daily tailscale-update job opens its PR with this. GITHUB_TOKEN cannot be
 # used: a PR it opens does not trigger `on: pull_request`, so ci.yml would never
 # run and automerge would wait on checks that never start. A fine-grained PAT
