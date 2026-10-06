@@ -20,21 +20,33 @@ echo "==> building the SSH client library"
 mise run ssh:lib
 
 echo "==> building menu bar app"
-(cd macos && swift build -c release --arch arm64 --arch x86_64)
-
-# Ask SwiftPM where it put the product rather than hardcoding a path: the
-# layout moved between toolchains, and a stale binary left at the old path
-# meant the copy below silently shipped an old build for hours.
-APP_BIN=$(cd macos && swift build -c release --arch arm64 --arch x86_64 --show-bin-path)/TSMuxMenu
-if [ ! -x "$APP_BIN" ]; then
-  echo "swift build reported no product at $APP_BIN" >&2
-  exit 1
-fi
-newest_src=$(find macos/Sources macos/Package.swift -type f -newer "$APP_BIN" -print -quit)
-if [ -n "$newest_src" ]; then
-  echo "$APP_BIN is older than $newest_src — the build did not pick up changes" >&2
-  exit 1
-fi
+# One architecture at a time, then lipo: a multi-arch `swift build` goes
+# through Xcode's build system, which on Xcode 26 cannot link the static
+# TSMuxSSH xcframework into the prelinked module ("library not found for
+# -ltsmuxssh"). Single-arch builds use SwiftPM's own, which can.
+SLICES=()
+SLICE_DIR=$(mktemp -d)
+for arch in arm64 x86_64; do
+  (cd macos && swift build -c release --arch "$arch")
+  # Ask SwiftPM where it put the product rather than hardcoding a path: the
+  # layout moved between toolchains, and a stale binary left at the old path
+  # meant the copy below silently shipped an old build for hours.
+  slice=$(cd macos && swift build -c release --arch "$arch" --show-bin-path)/TSMuxMenu
+  if [ ! -x "$slice" ]; then
+    echo "swift build reported no product at $slice" >&2
+    exit 1
+  fi
+  newest_src=$(find macos/Sources macos/Package.swift TSMuxShell/Sources -type f -newer "$slice" -print -quit)
+  if [ -n "$newest_src" ]; then
+    echo "$slice is older than $newest_src — the build did not pick up changes" >&2
+    exit 1
+  fi
+  # Copied out at once: some toolchains use one bin path for every arch.
+  cp "$slice" "$SLICE_DIR/TSMuxMenu-$arch"
+  SLICES+=("$SLICE_DIR/TSMuxMenu-$arch")
+done
+APP_BIN=$SLICE_DIR/TSMuxMenu
+lipo -create -output "$APP_BIN" "${SLICES[@]}"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
