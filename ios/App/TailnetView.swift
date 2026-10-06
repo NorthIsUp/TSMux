@@ -6,6 +6,7 @@ struct TailnetView: View {
   @Environment(TunnelModel.self) private var model
   @Environment(\.dismiss) private var dismiss
   @State private var confirmRemove = false
+  @State private var signIn: URL?
 
   var body: some View {
     if let t = model.tailnet(profile) {
@@ -17,11 +18,18 @@ struct TailnetView: View {
 
   private func form(_ t: ProfileStatus) -> some View {
     Form {
-      if t.condition == .needsLogin, let raw = t.authURL, let url = URL(string: raw) {
+      if t.condition == .needsLogin {
         Section {
-          Link(destination: url) { Label("Sign in to \(t.name)", systemImage: "person.badge.key") }
+          if let url = t.authURL.flatMap(URL.init(string:)) {
+            Button("Sign in to \(t.name)", systemImage: "person.badge.key") { signIn = url }
+          } else {
+            HStack(spacing: 12) {
+              ProgressView()
+              Text("Waiting for a sign-in link…")
+            }
+          }
         } footer: {
-          Text("Sign in in Safari, then come back. This tailnet connects on its own.")
+          Text("This tailnet connects on its own once you've signed in.")
         }
       }
 
@@ -74,6 +82,8 @@ struct TailnetView: View {
         Button("Remove tailnet", role: .destructive) { confirmRemove = true }
       }
     }
+    .signInSheet($signIn)
+    .onChange(of: t.condition) { _, c in if c == .running { signIn = nil } }
     .confirmationDialog(
       "Remove \(t.name)?", isPresented: $confirmRemove, titleVisibility: .visible
     ) {
