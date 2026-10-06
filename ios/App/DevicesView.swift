@@ -6,17 +6,26 @@ struct DevicesView: View {
   let profile: String
   @Environment(TunnelModel.self) private var model
   @State private var query = ""
+  @State private var shell: Device?
 
   var body: some View {
     List {
       ForEach(deviceGroups(filtered)) { g in
         Section(g.name) {
-          ForEach(g.devices) { DeviceRow(device: $0) }
+          ForEach(g.devices) { d in
+            DeviceRow(device: d) { shell = d }
+              .swipeActions {
+                Button("Shell", systemImage: "terminal") { shell = d }.tint(.indigo)
+              }
+          }
         }
       }
     }
     .navigationTitle("Devices")
     .searchable(text: $query)
+    .navigationDestination(item: $shell) { d in
+      if let t = model.tailnet(profile) { ShellScreen(device: d, tailnet: t) }
+    }
   }
 
   private var filtered: [Device] {
@@ -30,6 +39,7 @@ struct DevicesView: View {
 /// IP and the short name, like ⌥ and ⌥⇧ in the macOS menu.
 private struct DeviceRow: View {
   let device: Device
+  let openShell: () -> Void
   @State private var copied = false
 
   var body: some View {
@@ -56,6 +66,7 @@ private struct DeviceRow: View {
         Button("Copy IP", systemImage: "number") { copy(ip) }
       }
       Button("Copy name", systemImage: "textformat") { copy(device.shortName) }
+      Button("Open Shell", systemImage: "terminal", action: openShell)
       if let url = URL(string: device.url) {
         Link(destination: url) { Label("Open in Safari", systemImage: "safari") }
       }

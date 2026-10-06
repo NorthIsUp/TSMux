@@ -43,8 +43,10 @@ jobs:
       # Swift break fails CI rather than surfacing at release time.
       - name: swift build
         if: runner.os == 'macOS'
-        working-directory: macos
-        run: swift build -c release
+        run: |
+          mise run ssh:lib
+          swift test --package-path TSMuxShell
+          (cd macos && swift build -c release)
 
       # The iOS app: shared Swift models, then an unsigned device build of the
       # app and its tunnel extension around the Go core. With signing, the

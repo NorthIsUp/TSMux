@@ -13,6 +13,8 @@ settings:
 packages:
   TSMuxKit:
     path: ../TSMuxKit
+  TSMuxShell:
+    path: ../TSMuxShell
 schemes:
   TSMux:
     build:
@@ -28,6 +30,7 @@ targets:
     sources: [App]
     dependencies:
       - package: TSMuxKit
+      - package: TSMuxShell
       - target: TSMuxTunnel
     entitlements:
       path: App/TSMux.entitlements

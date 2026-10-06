@@ -16,6 +16,9 @@ GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-X main.version=$VERSI
 lipo -create -output bin/tsmux bin/tsmux-arm64 bin/tsmux-amd64
 rm -f bin/tsmux-arm64 bin/tsmux-amd64
 
+echo "==> building the SSH client library"
+mise run ssh:lib
+
 echo "==> building menu bar app"
 (cd macos && swift build -c release --arch arm64 --arch x86_64)
 

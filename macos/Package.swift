@@ -10,6 +10,7 @@ let package = Package(
     // SwiftPM links it but will not populate a bundle it did not assemble.
     .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
     .package(path: "../TSMuxKit"),
+    .package(path: "../TSMuxShell"),
   ],
   targets: [
     .executableTarget(
@@ -17,6 +18,7 @@ let package = Package(
       dependencies: [
         .product(name: "Sparkle", package: "Sparkle"),
         .product(name: "TSMuxKit", package: "TSMuxKit"),
+        .product(name: "TSMuxShell", package: "TSMuxShell"),
       ],
       path: "Sources/TSMuxMenu",
       // Each flag needs its own -Xlinker: these go through swiftc, which does

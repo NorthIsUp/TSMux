@@ -856,17 +856,48 @@ func cmdSSH() *cobra.Command {
 			if cfgPath != "" {
 				pc = fmt.Sprintf("%s --config %s connect %%h %%p", self, cfgPath)
 			}
-			sshArgs := append([]string{"-o", "ProxyCommand=" + pc}, args...)
+			sshArgs := []string{"-o", "ProxyCommand=" + pc}
+			var knownHosts string
+			// Pin the host key control advertises for a Tailscale SSH host, as
+			// `tailscale ssh` does; other hosts keep the user's own known_hosts.
+			_, host, found := strings.Cut(args[0], "@")
+			if !found {
+				host = args[0]
+			}
+			if cfg, err := load(); err == nil {
+				if sts, err := cfg.FetchStatus(); err == nil {
+					if lines := tsmux.KnownHosts(sts, host); lines != nil {
+						f, err := os.CreateTemp("", "tsmux-known-hosts-*")
+						if err != nil {
+							return err
+						}
+						knownHosts = f.Name()
+						defer os.Remove(knownHosts)
+						if _, err := f.Write(lines); err != nil {
+							f.Close()
+							return err
+						}
+						f.Close()
+						sshArgs = append(sshArgs,
+							"-o", "UserKnownHostsFile="+knownHosts,
+							"-o", "StrictHostKeyChecking=yes",
+							"-o", "UpdateHostKeys=no")
+					}
+				}
+			}
+			sshArgs = append(sshArgs, args...)
 			cmd := exec.Command("ssh", sshArgs...)
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-			if err := cmd.Run(); err != nil {
-				var ee *exec.ExitError
-				if errors.As(err, &ee) {
-					os.Exit(ee.ExitCode())
+			err = cmd.Run()
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				// os.Exit skips defers; the temp known_hosts goes first.
+				if knownHosts != "" {
+					os.Remove(knownHosts)
 				}
-				return err
+				os.Exit(ee.ExitCode())
 			}
-			return nil
+			return err
 		},
 	}
 	return c

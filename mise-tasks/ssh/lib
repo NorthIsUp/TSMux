@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Build the SSH client as TSMuxShell/TSMuxSSH.xcframework"
+#MISE sources=["go.mod", "go.sum", "shellcore/**/*.go", "internal/sshclient/**/*.go", "scripts/build-ssh-lib.sh"]
+#MISE outputs=["TSMuxShell/TSMuxSSH.xcframework/Info.plist"]
+set -euo pipefail
+
+./scripts/build-ssh-lib.sh

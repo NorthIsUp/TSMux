@@ -67,7 +67,14 @@ both have a `grafana`.
 **A device list per tailnet.** Open a tailnet's submenu → **Devices**, grouped
 by owner and by tag. Click to copy the URL; hold <kbd>⌥</kbd> for the IP,
 <kbd>⌥⇧</kbd> for the short name — the value you'll get is shown greyed on the
-right.
+right. Hold <kbd>⌘</kbd> to open an SSH shell to it in a window; on iOS, swipe
+a device or long-press it.
+
+**SSH that knows the tailnet.** The shell connects through the device's own
+tailnet. Hosts running Tailscale SSH sign you in with your tailnet identity, and
+their host keys come from the tailnet, so nothing asks you to trust a
+fingerprint. Plain OpenSSH hosts take a password and ask once about their key.
+`tsmux ssh` pins Tailscale SSH host keys the same way.
 
 **Per-tailnet settings.** Accept subnet routes, use the tailnet's DNS, allow
 incoming connections, pick an exit node — each set independently per tailnet,

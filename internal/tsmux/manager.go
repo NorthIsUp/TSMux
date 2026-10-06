@@ -211,7 +211,7 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 	// renaming temp files through fails on the vanished temp file, and that
 	// error would hide the "already running" one.
 	if err := protectStateDir(filepath.Dir(dir), dir); err != nil {
-		lock.Close()
+		unlockStateDir(lock)
 		return fmt.Errorf("profile %s: protect state dir: %w", p.Name, err)
 	}
 	srv := &tsnet.Server{
@@ -226,7 +226,7 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 		srv.Logf = srv.UserLogf
 	}
 	if err := srv.Start(); err != nil {
-		lock.Close()
+		unlockStateDir(lock)
 		return fmt.Errorf("profile %s: %w", p.Name, err)
 	}
 	m.mu.Lock()
@@ -765,6 +765,10 @@ type Device struct {
 	Tags     []string `json:"tags,omitempty"`
 	Online   bool     `json:"online"`
 	ExitNode bool     `json:"exit_node,omitempty"`
+	// SSHHostKeys are the host keys the peer's Tailscale SSH server
+	// advertises through control, in authorized_keys form. A client pins
+	// them, as `tailscale ssh` does, instead of trusting on first use.
+	SSHHostKeys []string `json:"ssh_host_keys,omitempty"`
 }
 
 type StatusUser struct {
@@ -875,6 +879,11 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 		}
 		for _, ip := range ps.TailscaleIPs {
 			d.IPs = append(d.IPs, ip.String())
+		}
+		for _, k := range ps.SSH_HostKeys {
+			if k = strings.TrimSpace(k); k != "" && !strings.ContainsAny(k, "\r\n") {
+				d.SSHHostKeys = append(d.SSHHostKeys, k)
+			}
 		}
 		if ps.Tags != nil {
 			for i := range ps.Tags.Len() {
@@ -1006,7 +1015,7 @@ func (m *Manager) Close() error {
 			err = e
 		}
 		if n.lock != nil {
-			n.lock.Close()
+			unlockStateDir(n.lock)
 		}
 	}
 	m.nodes = map[string]*Node{}
@@ -1046,6 +1055,15 @@ func lockStateDir(dir string) (*os.File, error) {
 		return nil, fmt.Errorf("%w (state dir %s)", ErrStateDirLocked, dir)
 	}
 	return f, nil
+}
+
+// unlockStateDir releases the lock before closing the file. A flock belongs
+// to the open file description, and a child that tsnet forks shares it until
+// the child execs; closing our fd alone left the lock held through that
+// window, so an immediate restart found the dir "already running".
+func unlockStateDir(f *os.File) {
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	f.Close()
 }
 
 // pipe joins two conns and returns when either direction closes.
