@@ -33,6 +33,16 @@ public struct TunnelRequest: Codable, Sendable, Equatable {
       body: try json(ProfileEdit(name: name, displayName: displayName, controlURL: controlURL)))
   }
 
+  /// Renames a tailnet once sign-in has said what it is. `newName` moves the
+  /// config key and the saved login with it.
+  public static func renameProfile(_ name: String, to newName: String, displayName: String) throws
+    -> TunnelRequest
+  {
+    TunnelRequest(
+      method: "POST", path: "/profiles/rename",
+      body: try json(ProfileEdit(name: name, displayName: displayName, newName: newName)))
+  }
+
   public static func removeProfile(_ name: String) throws -> TunnelRequest {
     TunnelRequest(method: "POST", path: "/profiles/remove", body: try json(ProfileEdit(name: name)))
   }
@@ -91,11 +101,13 @@ struct ProfileEdit: Codable, Sendable {
   var name: String
   var displayName: String?
   var controlURL: String?
+  var newName: String?
 
   enum CodingKeys: String, CodingKey {
     case name
     case displayName = "display_name"
     case controlURL = "control_url"
+    case newName = "new_name"
   }
 }
 

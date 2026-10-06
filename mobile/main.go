@@ -55,7 +55,10 @@ func start(d string) error {
 	defer mu.Unlock()
 	debug.SetMemoryLimit(memoryLimit)
 	dir = d
-	if f, err := os.Create(filepath.Join(dir, "tsmux.log")); err == nil {
+	// Library/Caches is the one part of the container devicectl can read back.
+	logDir := filepath.Join(dir, "Library", "Caches")
+	_ = os.MkdirAll(logDir, 0o700)
+	if f, err := os.Create(filepath.Join(logDir, "tsmux.log")); err == nil {
 		log.SetOutput(f)
 	}
 	return up()
@@ -95,6 +98,7 @@ type profileRequest struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name,omitempty"`
 	ControlURL  string `json:"control_url,omitempty"`
+	NewName     string `json:"new_name,omitempty"`
 }
 
 func call(raw []byte) response {
@@ -103,14 +107,17 @@ func call(raw []byte) response {
 		return errResponse(http.StatusBadRequest, err)
 	}
 	switch req.Path {
-	case "/profiles/add", "/profiles/remove":
+	case "/profiles/add", "/profiles/remove", "/profiles/rename":
 		var p profileRequest
 		if err := json.Unmarshal([]byte(req.Body), &p); err != nil {
 			return errResponse(http.StatusBadRequest, err)
 		}
 		edit := addProfile
-		if req.Path == "/profiles/remove" {
+		switch req.Path {
+		case "/profiles/remove":
 			edit = removeProfile
+		case "/profiles/rename":
+			edit = renameProfile
 		}
 		if err := edit(p); err != nil {
 			return errResponse(http.StatusBadRequest, err)
@@ -156,6 +163,44 @@ func removeProfile(p profileRequest) error {
 		}
 		delete(c.Profiles, p.Name)
 		return os.RemoveAll(c.StateDir(p.Name))
+	})
+}
+
+// renameProfile renames a tailnet after sign-in, when its real name is known.
+// The state dir moves with the key, so the node keeps its login.
+func renameProfile(p profileRequest) error {
+	return editConfig(func(c *tsmux.Config) error {
+		prof, ok := c.Profiles[p.Name]
+		if !ok {
+			return fmt.Errorf("no profile %q", p.Name)
+		}
+		if p.DisplayName != "" {
+			prof.DisplayName = p.DisplayName
+		}
+		if p.NewName == "" || p.NewName == p.Name {
+			return nil
+		}
+		if _, ok := c.Profiles[p.NewName]; ok {
+			return fmt.Errorf("profile %q already exists", p.NewName)
+		}
+		// A device name that was only derived from the old key follows the new one.
+		if prof.Hostname == c.Router.ProfileHostnameBase+"-"+p.Name {
+			prof.Hostname = ""
+		}
+		for _, t := range c.Tunnels {
+			if t.Profile == p.Name {
+				t.Profile = p.NewName
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(c.StateDir(p.NewName)), 0o700); err != nil {
+			return err
+		}
+		if err := os.Rename(c.StateDir(p.Name), c.StateDir(p.NewName)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		delete(c.Profiles, p.Name)
+		c.Profiles[p.NewName] = prof
+		return nil
 	})
 }
 

@@ -61,10 +61,27 @@ func TestCallLifecycle(t *testing.T) {
 		t.Fatalf("state dir should live in the container: %v", err)
 	}
 
-	if r := mustCall(t, "POST", "/profiles/remove", profileRequest{Name: "work"}); r.Code != 200 {
+	ren := profileRequest{Name: "work", NewName: "acme", DisplayName: "Acme"}
+	if r := mustCall(t, "POST", "/profiles/rename", ren); r.Code != 200 {
+		t.Fatalf("rename: %+v", r)
+	}
+	r = mustCall(t, "GET", "/status", nil)
+	var renamed []struct {
+		Profile     string
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.Unmarshal([]byte(r.Body), &renamed); err != nil || len(renamed) != 1 ||
+		renamed[0].Profile != "acme" || renamed[0].DisplayName != "Acme" {
+		t.Fatalf("status after rename: %+v %v", r, err)
+	}
+	if _, err := os.Stat(filepath.Join(d, "state", "profiles", "acme")); err != nil {
+		t.Fatalf("rename should move the state dir: %v", err)
+	}
+
+	if r := mustCall(t, "POST", "/profiles/remove", profileRequest{Name: "acme"}); r.Code != 200 {
 		t.Fatalf("remove: %+v", r)
 	}
-	if _, err := os.Stat(filepath.Join(d, "state", "profiles", "work")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(d, "state", "profiles", "acme")); !os.IsNotExist(err) {
 		t.Fatalf("remove should purge credentials: %v", err)
 	}
 	if r := mustCall(t, "GET", "/proxy.pac", nil); r.Code != 200 || !strings.Contains(r.Body, "FindProxyForURL") {

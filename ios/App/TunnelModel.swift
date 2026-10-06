@@ -135,14 +135,25 @@ final class TunnelModel {
     }
   }
 
-  /// Adds a tailnet, turning TSMux on first if it isn't. Returns the key the
-  /// new tailnet was saved under, bumped past any existing one.
-  func add(displayName: String, controlURL: String) async throws -> String {
+  /// Starts a tailnet under a placeholder key, turning TSMux on first if it
+  /// isn't. Its real name is only known after sign-in; see `rename`.
+  func add(controlURL: String) async throws -> String {
     try await start()
+    var key = "new"
+    while tailnet(key) != nil { key = Slug.bump(key) }
+    _ = try await send(
+      .addProfile(name: key, displayName: "New tailnet", controlURL: controlURL)
+    ).decode([String: Bool].self)
+    await refresh()
+    return key
+  }
+
+  /// Gives a signed-in tailnet its name. Returns the key it now lives under.
+  func rename(_ profile: String, to displayName: String) async throws -> String {
     var key = Slug.key(displayName)
     guard !key.isEmpty else { throw TunnelError(message: "Use letters or numbers in the name.") }
-    while tailnet(key) != nil { key = Slug.bump(key) }
-    _ = try await send(.addProfile(name: key, displayName: displayName, controlURL: controlURL))
+    while key != profile, tailnet(key) != nil { key = Slug.bump(key) }
+    _ = try await send(.renameProfile(profile, to: key, displayName: displayName))
       .decode([String: Bool].self)
     await refresh()
     return key

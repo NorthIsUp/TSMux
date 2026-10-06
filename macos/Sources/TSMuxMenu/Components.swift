@@ -83,6 +83,7 @@ extension ProfileStatus.Condition {
     case .running: return "checkmark.circle.fill"
     case .starting: return "arrow.triangle.2.circlepath"
     case .needsLogin: return "exclamationmark.triangle.fill"
+    case .needsApproval: return "hourglass"
     case .stopped: return "pause.circle"
     case .failed: return "xmark.octagon.fill"
     }
@@ -95,6 +96,7 @@ extension ProfileStatus.Condition {
     case .running: return .systemGreen
     case .starting: return .systemBlue
     case .needsLogin: return .systemYellow
+    case .needsApproval: return .systemOrange
     case .stopped: return nil
     case .failed: return .systemRed
     }
@@ -105,6 +107,7 @@ extension ProfileStatus.Condition {
     case .running: return "Connected"
     case .starting: return "Connecting…"
     case .needsLogin: return "Needs login"
+    case .needsApproval: return "Waiting for approval"
     case .stopped: return "Stopped"
     case .failed: return "Error"
     }
