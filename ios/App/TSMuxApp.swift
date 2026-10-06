@@ -26,7 +26,7 @@ struct ContentView: View {
             isOn: Binding(get: { model.isOn }, set: { on in Task { await model.setOn(on) } })
           ) {
             VStack(alignment: .leading) {
-              Text("TSMux")
+              Text("VPN")
               Text(model.statusText).font(.caption).foregroundStyle(.secondary)
             }
           }
@@ -36,13 +36,27 @@ struct ContentView: View {
           )
         }
 
-        if model.isConnected && !model.tailnets.isEmpty {
+        if model.loaded && !model.tailnets.isEmpty {
           Section("Tailnets") {
             ForEach(model.tailnets) { t in
               NavigationLink(value: t.profile) { TailnetRow(tailnet: t) }
             }
           }
-        } else if model.isConnected || !model.isOn {
+        } else if !model.loaded && !model.known.isEmpty {
+          // Last session's tailnets, until the tunnel says how they are now.
+          Section("Tailnets") {
+            ForEach(model.known) { t in
+              KnownTailnetRow(name: t.name, waiting: model.isOn)
+            }
+          }
+        } else if !model.loaded && model.isOn {
+          Section {
+            HStack(spacing: 12) {
+              ProgressView()
+              Text("Loading tailnets…").foregroundStyle(.secondary)
+            }
+          }
+        } else {
           Section {
             Button("Set up your first tailnet…", systemImage: "plus.circle") { adding = true }
           }
@@ -77,7 +91,7 @@ struct TailnetRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      if tailnet.condition == .starting {
+      if loading {
         ProgressView().controlSize(.mini).frame(width: 10, height: 10)
       } else {
         Circle().fill(color).frame(width: 10, height: 10)
@@ -88,6 +102,9 @@ struct TailnetRow: View {
       }
     }
   }
+
+  /// NoState is a node still reading its saved login, not one that is off.
+  private var loading: Bool { tailnet.condition == .starting || tailnet.state == "NoState" }
 
   private var color: Color {
     switch tailnet.condition {
@@ -108,8 +125,28 @@ struct TailnetRow: View {
     case .needsLogin: return "Sign in required"
     case .needsApproval: return "Waiting for admin approval"
     case .lockedOut: return "Needs tailnet-lock signature"
-    case .stopped: return "Off"
+    case .stopped: return loading ? "Starting…" : "Off"
     case .failed: return tailnet.error ?? "Failed"
+    }
+  }
+}
+
+/// A row for a tailnet the tunnel hasn't reported on yet.
+struct KnownTailnetRow: View {
+  let name: String
+  let waiting: Bool
+
+  var body: some View {
+    HStack(spacing: 12) {
+      if waiting {
+        ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+      } else {
+        Circle().fill(.gray).frame(width: 10, height: 10)
+      }
+      VStack(alignment: .leading) {
+        Text(name)
+        Text(waiting ? "Starting…" : "Off").font(.caption).foregroundStyle(.secondary)
+      }
     }
   }
 }

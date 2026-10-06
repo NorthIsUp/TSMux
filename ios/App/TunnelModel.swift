@@ -10,6 +10,12 @@ import UserNotifications
 final class TunnelModel {
   private(set) var vpnStatus: NEVPNStatus = .invalid
   private(set) var tailnets: [ProfileStatus] = []
+  /// Whether `tailnets` has come from the tunnel since it last connected;
+  /// until then the list shows `known` with spinners rather than guesses.
+  private(set) var loaded = false
+  /// The tailnets from the last status, so the list keeps its rows while the
+  /// tunnel starts or is off.
+  private(set) var known: [KnownTailnet] = KnownTailnet.saved
   var lastError: String?
 
   private var manager: NETunnelProviderManager?
@@ -22,8 +28,9 @@ final class TunnelModel {
   var statusText: String {
     switch vpnStatus {
     case .connected:
+      guard loaded else { return "Loading tailnets…" }
       let up = tailnets.filter { $0.condition == .running }.count
-      return tailnets.isEmpty ? "On" : "On · \(up) of \(tailnets.count) tailnets connected"
+      return tailnets.isEmpty ? "No tailnets yet" : "\(up) of \(tailnets.count) tailnets connected"
     case .connecting, .reasserting: return "Connecting…"
     case .disconnecting: return "Disconnecting…"
     case .disconnected, .invalid: return "Off"
@@ -45,6 +52,7 @@ final class TunnelModel {
 
   private func updateStatus() {
     vpnStatus = manager?.connection.status ?? .invalid
+    if !isConnected { loaded = false }
     if !isOn { tailnets = [] }
   }
 
@@ -62,7 +70,7 @@ final class TunnelModel {
 
   /// Installs the VPN configuration on first use, which is when iOS asks the
   /// user to allow it, then starts the tunnel and waits for it to come up.
-  private func start() async throws {
+  func start() async throws {
     // Disconnecting in Settings clears on-demand and Settings can delete the
     // configuration; the manager loaded at launch shows neither.
     manager = try await NETunnelProviderManager.loadAllFromPreferences().first
@@ -105,7 +113,7 @@ final class TunnelModel {
 
   /// On-demand goes off first: a tunnel stopped with it still on is
   /// restarted by iOS straight away.
-  private func stop() async {
+  func stop() async {
     if let fresh = try? await NETunnelProviderManager.loadAllFromPreferences().first {
       manager = fresh
     }
@@ -141,6 +149,9 @@ final class TunnelModel {
     guard isConnected else { return }
     do {
       tailnets = try await send(.status).decode([ProfileStatus].self)
+      loaded = true
+      known = tailnets.map { KnownTailnet(profile: $0.profile, name: $0.name) }
+      KnownTailnet.saved = known
       await scheduleExpiryReminders()
     } catch {
       // A poll that fails mid-transition is not worth an alert; the next
@@ -234,4 +245,22 @@ final class TunnelModel {
   }
 
   private func expiryID(_ profile: String) -> String { "expiry-\(profile)" }
+}
+
+/// Just enough of a tailnet to draw its row before the tunnel answers.
+struct KnownTailnet: Codable, Hashable, Identifiable {
+  let profile: String
+  let name: String
+
+  var id: String { profile }
+
+  private static let key = "knownTailnets"
+
+  static var saved: [KnownTailnet] {
+    get {
+      UserDefaults.standard.data(forKey: key)
+        .flatMap { try? JSONDecoder().decode([KnownTailnet].self, from: $0) } ?? []
+    }
+    set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: key) }
+  }
 }
