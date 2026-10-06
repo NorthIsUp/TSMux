@@ -251,3 +251,41 @@ func TestValidateHostname(t *testing.T) {
 		}
 	}
 }
+
+// A rename after sign-in must keep the login and ports, and a device name that
+// only echoed the old key follows the new one.
+func TestRenameProfile(t *testing.T) {
+	c := Default()
+	c.Paths.StateDir = t.TempDir()
+	c.Profiles = map[string]*Profile{"new": {}, "home": {}}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	before := *c.Profiles["new"]
+	if err := os.MkdirAll(c.StateDir("new"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.RenameProfile("new", "home", ""); err == nil {
+		t.Error("renaming onto an existing profile should fail")
+	}
+	if err := c.RenameProfile("new", "work", "Work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	p, ok := c.Profiles["work"]
+	if !ok || c.Profiles["new"] != nil {
+		t.Fatalf("profiles after rename: %v", c.Profiles)
+	}
+	if p.DisplayName != "Work" || p.HTTPPort != before.HTTPPort || p.SOCKSPort != before.SOCKSPort {
+		t.Errorf("rename changed more than the key: %+v", p)
+	}
+	if p.Hostname != c.Router.ProfileHostnameBase+"-work" {
+		t.Errorf("hostname = %q, want it to follow the key", p.Hostname)
+	}
+	if _, err := os.Stat(c.StateDir("work")); err != nil {
+		t.Errorf("state dir did not move: %v", err)
+	}
+}

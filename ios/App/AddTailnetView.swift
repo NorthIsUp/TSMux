@@ -17,7 +17,7 @@ struct AddTailnetView: View {
   @State private var busy = false
   @State private var failure: String?
   @State private var signIn: URL?
-  @State private var openedAuthURL: String?
+  @State private var flow = AddFlow()
   @State private var confirmCancel = false
 
   var body: some View {
@@ -106,24 +106,20 @@ struct AddTailnetView: View {
 
   private func signingIn(_ key: String) -> some View {
     let t = model.tailnet(key)
-    let auth = t?.authURL.flatMap(URL.init(string:))
+    let step = AddFlow.step(t)
     return Form {
       Section {
         HStack(spacing: 12) {
-          ProgressView()
-          Text(headline(t, hasLink: auth != nil))
+          if step.isWaiting { ProgressView() }
+          Text(step.headline).foregroundStyle(step.isWaiting ? .primary : Color.red)
         }
-        if let auth {
-          Button("Open Sign-in Page", systemImage: "person.badge.key") { signIn = auth }
+        if case .signIn(let url) = step {
+          Button("Open Sign-in Page", systemImage: "person.badge.key") { signIn = url }
         }
       } footer: {
-        if let e = t?.error, !e.isEmpty {
-          Text(e).foregroundStyle(.red)
-        } else if let state = t?.state, !state.isEmpty {
-          Text("State: \(state)")
-        }
+        if step.isWaiting, let state = t?.state, !state.isEmpty { Text("State: \(state)") }
       }
-      if t?.condition == .needsApproval, let admin = t?.adminURL.flatMap(URL.init(string:)) {
+      if case .needsApproval(let admin?) = step {
         Section {
           Link("Open Admin Console", destination: admin)
         } footer: {
@@ -137,15 +133,6 @@ struct AddTailnetView: View {
       }
     }
     .task(id: key) { await watch(key) }
-  }
-
-  private func headline(_ t: ProfileStatus?, hasLink: Bool) -> String {
-    if t?.condition == .needsApproval {
-      return "Signed in. Waiting for a tailnet admin to approve this device…"
-    }
-    if hasLink { return "Sign in to add your tailnet." }
-    return t?.condition == .needsLogin
-      ? "Waiting for a sign-in link…" : "Connecting to the coordination server…"
   }
 
   private func naming(_ key: String) -> some View {
@@ -201,20 +188,14 @@ struct AddTailnetView: View {
   private func watch(_ key: String) async {
     while !Task.isCancelled {
       await model.refresh()
-      if let t = model.tailnet(key) {
-        if t.condition == .running {
-          signIn = nil
-          name = Slug.suggestedName(tailnet: t.tailnet, magicDNSSuffix: t.magicDNSSuffix)
-          signedIn = true
-          return
-        }
-        // Latch on the URL: the same link must not reopen, but a different
-        // one is a genuine re-registration.
-        if let raw = t.authURL, !raw.isEmpty, raw != openedAuthURL, let url = URL(string: raw) {
-          openedAuthURL = raw
-          signIn = url
-        }
+      let step = AddFlow.step(model.tailnet(key))
+      if case .signedIn(let suggested) = step {
+        signIn = nil
+        name = suggested
+        signedIn = true
+        return
       }
+      if let url = flow.autoOpen(step) { signIn = url }
       try? await Task.sleep(for: .seconds(1))
     }
   }

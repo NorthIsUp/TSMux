@@ -382,6 +382,44 @@ func cmdProfile() *cobra.Command {
 	rm.Flags().BoolVar(&purge, "purge", false, "also delete the profile's saved tailnet credentials")
 	c.AddCommand(rm)
 
+	var renameDisplay string
+	rename := &cobra.Command{
+		Use: "rename <name> [new-name]", Short: "Rename a profile, keeping its login",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			cfg, err := load()
+			if err != nil {
+				return err
+			}
+			newName := args[0]
+			if len(args) == 2 {
+				newName = args[1]
+			}
+			// Same reason as rm: the daemon holds the state dir open.
+			if live, err := cfg.FetchStatus(); err == nil && newName != args[0] {
+				for _, s := range live {
+					if s.Profile == args[0] {
+						return fmt.Errorf("profile %q is running; stop the daemon first (tsmux up is holding it)", args[0])
+					}
+				}
+			}
+			if err := cfg.RenameProfile(args[0], newName, renameDisplay); err != nil {
+				return err
+			}
+			if err := cfg.Normalize(); err != nil {
+				return err
+			}
+			if err := cfg.Save(cfg.Path()); err != nil {
+				return err
+			}
+			p := cfg.Profiles[newName]
+			emit(p, func() { fmt.Printf("renamed %s to %s (%s)\n", args[0], newName, p.DisplayName) })
+			return nil
+		},
+	}
+	rename.Flags().StringVar(&renameDisplay, "display-name", "", "human-readable name for the GUI")
+	c.AddCommand(rename)
+
 	c.AddCommand(cmdProfileSet())
 
 	c.AddCommand(&cobra.Command{
