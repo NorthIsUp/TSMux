@@ -2,6 +2,7 @@ package tsmux
 
 import (
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -29,5 +30,14 @@ func protectStateDir(profiles, dir string) error {
 	if err != nil {
 		return err
 	}
-	return excludeFromBackup(profiles)
+	// A state dir on a volume without xattrs (SMB, exFAT) or a sandbox that
+	// refuses the xattr cannot be excluded; that costs less than a profile
+	// that never starts.
+	if err := backupExcluder(profiles); err != nil {
+		log.Printf("state dir %s is not excluded from backups: %v", profiles, err)
+	}
+	return nil
 }
+
+// backupExcluder is swapped in tests to simulate a volume without xattrs.
+var backupExcluder = excludeFromBackup
