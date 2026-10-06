@@ -50,7 +50,7 @@ final class TunnelModel {
 
   func setOn(_ on: Bool) async {
     guard on else {
-      manager?.connection.stopVPNTunnel()
+      await stop()
       return
     }
     do {
@@ -65,24 +65,51 @@ final class TunnelModel {
   private func start() async throws {
     if isConnected { return }
     let m = manager ?? NETunnelProviderManager()
-    if !m.isEnabled || m.protocolConfiguration == nil {
-      let proto = NETunnelProviderProtocol()
-      proto.providerBundleIdentifier = (Bundle.main.bundleIdentifier ?? "") + ".tunnel"
-      proto.serverAddress = "Every tailnet at once"
-      m.protocolConfiguration = proto
-      m.localizedDescription = "TSMux"
-      m.isEnabled = true
+    // Configurations saved before on-demand existed, and ones the user
+    // turned off, come through here too: on-demand is what brings the
+    // extension back after iOS kills it.
+    if !m.isEnabled || m.protocolConfiguration == nil || !m.isOnDemandEnabled {
+      if !m.isEnabled || m.protocolConfiguration == nil {
+        let proto = NETunnelProviderProtocol()
+        proto.providerBundleIdentifier = (Bundle.main.bundleIdentifier ?? "") + ".tunnel"
+        proto.serverAddress = "Every tailnet at once"
+        m.protocolConfiguration = proto
+        m.localizedDescription = "TSMux"
+        m.isEnabled = true
+      }
+      let always = NEOnDemandRuleConnect()
+      always.interfaceTypeMatch = .any
+      m.onDemandRules = [always]
+      m.isOnDemandEnabled = true
       try await m.saveToPreferences()
       // A freshly saved configuration can't start until it is loaded back.
       try await m.loadFromPreferences()
       manager = m
     }
-    try m.connection.startVPNTunnel()
+    // Saving with on-demand on may already have started it.
+    if [.disconnected, .invalid].contains(m.connection.status) {
+      try m.connection.startVPNTunnel()
+    }
     for _ in 0..<60 where !isConnected {
       try await Task.sleep(for: .milliseconds(250))
       updateStatus()
     }
     guard isConnected else { throw TunnelError(message: "TSMux didn't connect. Try again.") }
+  }
+
+  /// On-demand goes off first: a tunnel stopped with it still on is
+  /// restarted by iOS straight away.
+  private func stop() async {
+    guard let m = manager else { return }
+    if m.isOnDemandEnabled {
+      m.isOnDemandEnabled = false
+      do {
+        try await m.saveToPreferences()
+      } catch {
+        lastError = error.localizedDescription
+      }
+    }
+    m.connection.stopVPNTunnel()
   }
 
   private func send(_ req: TunnelRequest) async throws -> TunnelResponse {

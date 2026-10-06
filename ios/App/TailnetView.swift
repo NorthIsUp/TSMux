@@ -33,6 +33,15 @@ struct TailnetView: View {
         }
       }
 
+      if let health = t.healthMessages, !health.isEmpty {
+        Section("Health") {
+          ForEach(health, id: \.self) { h in
+            Label(h, systemImage: "exclamationmark.triangle.fill")
+              .foregroundStyle(.orange)
+          }
+        }
+      }
+
       Section {
         if let u = t.user { LabeledContent("Account", value: u.loginName) }
         if let n = t.tailnet { LabeledContent("Tailnet", value: n) }
