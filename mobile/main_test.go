@@ -2,23 +2,62 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// Off the defaults, so the test runs beside a live daemon.
-const testConfig = `version: 1
+// Ports the kernel hands out, so the test runs beside a live daemon and
+// beside other test runs on the same machine.
+func testConfig(t *testing.T) string {
+	t.Helper()
+	free := func() (int, net.Listener) {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ln.Addr().(*net.TCPAddr).Port, ln
+	}
+	var held []net.Listener
+	defer func() {
+		for _, ln := range held {
+			ln.Close()
+		}
+	}()
+	ports := make([]int, 3)
+	for i := range ports {
+		var ln net.Listener
+		ports[i], ln = free()
+		held = append(held, ln)
+	}
+	// The one profile added gets the base pair: base and base+1.
+	var base int
+	for range 50 {
+		p, ln := free()
+		held = append(held, ln)
+		if next, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p+1)); err == nil {
+			held = append(held, next)
+			base = p
+			break
+		}
+	}
+	if base == 0 {
+		t.Fatal("no free consecutive port pair")
+	}
+	return fmt.Sprintf(`version: 1
 router:
-  http_proxy: 127.0.0.1:53100
-  socks5_proxy: 127.0.0.1:53101
-  pac_listen: 127.0.0.1:53180
-  profile_http_proxy_base: 53110
-  profile_socks5_proxy_base: 53111
+  http_proxy: 127.0.0.1:%d
+  socks5_proxy: 127.0.0.1:%d
+  pac_listen: 127.0.0.1:%d
+  profile_http_proxy_base: %d
+  profile_socks5_proxy_base: %d
   profile_hostname_base: tsmux
 profiles: {}
-`
+`, ports[0], ports[1], ports[2], base, base+1)
+}
 
 func mustCall(t *testing.T, method, path string, body any) response {
 	t.Helper()
@@ -29,7 +68,7 @@ func mustCall(t *testing.T, method, path string, body any) response {
 
 func TestCallLifecycle(t *testing.T) {
 	d := t.TempDir()
-	if err := os.WriteFile(filepath.Join(d, "config.yaml"), []byte(testConfig), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(d, "config.yaml"), []byte(testConfig(t)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if r := mustCall(t, "GET", "/status", nil); r.Code != 503 {
