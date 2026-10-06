@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -317,6 +319,9 @@ func (c *Config) RestoreSystemProxy() error {
 		return fmt.Errorf("system proxy is macOS-only")
 	}
 	b, err := os.ReadFile(c.statePath())
+	if errors.Is(err, fs.ErrNotExist) {
+		return c.clearOwnProxy()
+	}
 	if err != nil {
 		return fmt.Errorf("no recorded system proxy state: %w", err)
 	}
@@ -333,6 +338,23 @@ func (c *Config) RestoreSystemProxy() error {
 		}
 	}
 	return os.Remove(c.statePath())
+}
+
+// clearOwnProxy recovers when the saved state is gone (already restored, or
+// deleted by hand): only services still pointing at our PAC are ours to undo,
+// and with none left there is nothing to restore.
+func (c *Config) clearOwnProxy() error {
+	services, err := networkServices()
+	if err != nil {
+		return err
+	}
+	for _, s := range services {
+		if st := readAutoProxy(s); st.Enabled && st.URL == c.PACURL() {
+			_ = run("networksetup", "-setautoproxyurl", s, " ")
+			_ = run("networksetup", "-setautoproxystate", s, "off")
+		}
+	}
+	return nil
 }
 
 func (c *Config) SystemProxyStatus() ([]proxyState, error) {
