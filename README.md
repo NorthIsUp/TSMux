@@ -131,7 +131,7 @@ system Tailscale installed.
 | `127.0.0.1:43100` / `:43101` | router HTTP + SOCKS5 — picks the tailnet from the hostname |
 | `127.0.0.1:43110`, `43112`, … | one proxy per tailnet, for pinning a browser profile to one |
 | `127.0.0.1:43180/proxy.pac` | the generated PAC file |
-| `127.0.0.1:43180/status` | daemon status as JSON |
+| `127.0.0.1:43180/status` | daemon status as JSON; needs `Authorization: Bearer $(cat ~/.local/state/tsmux/api-token)` |
 
 ## Configuration
 

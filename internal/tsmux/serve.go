@@ -9,9 +9,10 @@ import (
 
 // Serve opens every loopback listener a running daemon owns: the router
 // proxies, one proxy pair per running profile, the PAC/API listener and the
-// configured tunnels. The returned func closes them all; on error, whatever
-// was already opened is closed before returning.
-func Serve(cfg *Config, m *Manager) (closeAll func(), err error) {
+// configured tunnels. A nil local skips the PAC/API listener, for hosts that
+// reach the API in process. The returned func closes them all; on error,
+// whatever was already opened is closed before returning.
+func Serve(cfg *Config, m *Manager, local http.Handler) (closeAll func(), err error) {
 	var closers []func()
 	closeAll = func() {
 		for _, f := range closers {
@@ -56,14 +57,16 @@ func Serve(cfg *Config, m *Manager) (closeAll func(), err error) {
 		}
 	}
 
-	pl, err := net.Listen("tcp", cfg.Router.PACListen)
-	if err != nil {
-		return nil, fmt.Errorf("pac server: %w", err)
+	if local != nil {
+		pl, err := net.Listen("tcp", cfg.Router.PACListen)
+		if err != nil {
+			return nil, fmt.Errorf("pac server: %w", err)
+		}
+		closers = append(closers, func() { pl.Close() })
+		go (&http.Server{Handler: local}).Serve(pl)
+		log.Printf("%-12s %s", "pac", cfg.PACURL())
+		log.Printf("%-12s %s", "status", cfg.StatusURL())
 	}
-	closers = append(closers, func() { pl.Close() })
-	go (&http.Server{Handler: cfg.LocalHandler(m)}).Serve(pl)
-	log.Printf("%-12s %s", "pac", cfg.PACURL())
-	log.Printf("%-12s %s", "status", cfg.StatusURL())
 
 	for _, t := range cfg.OrderedTunnels() {
 		dial := m.Dial

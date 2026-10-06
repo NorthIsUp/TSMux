@@ -135,7 +135,7 @@ func call(raw []byte) response {
 	r := httptest.NewRequest(req.Method, "http://127.0.0.1"+req.Path, strings.NewReader(req.Body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	cfg.LocalHandler(mgr).ServeHTTP(w, r)
+	cfg.InProcessHandler(mgr).ServeHTTP(w, r)
 	return response{Code: w.Code, Body: w.Body.String()}
 }
 
@@ -232,7 +232,10 @@ func up() error {
 			return err
 		}
 	}
-	closer, err := tsmux.Serve(c, m)
+	// No PAC/API listener: the app reaches the API through TSMuxCall, and the
+	// tunnel hands iOS the PAC as script. On TCP loopback any other app could
+	// call it.
+	closer, err := tsmux.Serve(c, m, nil)
 	if err != nil {
 		cancelCtx()
 		m.Close()

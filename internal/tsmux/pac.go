@@ -71,8 +71,24 @@ func (c *Config) PACURL() string { return "http://" + c.Router.PACListen + "/pro
 func (c *Config) StatusURL() string { return "http://" + c.Router.PACListen + "/status" }
 
 // LocalHandler serves the PAC file and the daemon's local API on one
-// loopback listener.
-func (c *Config) LocalHandler(m *Manager) http.Handler {
+// loopback listener. Only the PAC file is open: browsers and the system proxy
+// fetch it with no way to add a header, and it holds nothing but suffixes and
+// loopback ports. Every other path, unknown ones included, needs the token.
+func (c *Config) LocalHandler(m *Manager, token string) http.Handler {
+	all := c.InProcessHandler(m)
+	authed := requireToken(token, all)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/proxy.pac" {
+			all.ServeHTTP(w, r)
+			return
+		}
+		authed.ServeHTTP(w, r)
+	})
+}
+
+// InProcessHandler is the PAC and API with no token check, for callers that
+// never cross a socket (the iOS extension's TSMuxCall). Never listen with it.
+func (c *Config) InProcessHandler(m *Manager) http.Handler {
 	mux := http.NewServeMux()
 	pac := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ns-proxy-autoconfig")
@@ -168,10 +184,9 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	enc.Encode(v)
 }
 
-// guard is the whole authorization story for this listener. A browser loads
-// the PAC file from it, so loopback alone is not a boundary: any page could
-// otherwise POST here. No token file — anything able to read a token could
-// already rewrite config.yaml and the state dir, so it would buy nothing.
+// guard keeps browsers out: a browser loads the PAC file from this listener,
+// so any page could otherwise reach it. requireToken keeps out other local
+// users and apps, which loopback alone does not.
 func guard(h http.HandlerFunc, write bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
@@ -219,14 +234,9 @@ func (c *Config) PostLogout(profile string) (Status, error) {
 
 // Shutdown asks a running daemon to exit, whoever started it.
 func (c *Config) Shutdown() error {
-	cl := &http.Client{Timeout: 3 * time.Second}
-	req, err := http.NewRequest(http.MethodPost, "http://"+c.Router.PACListen+"/shutdown", nil)
+	resp, err := c.call(http.MethodPost, "/shutdown", nil, 3*time.Second)
 	if err != nil {
 		return err
-	}
-	resp, err := cl.Do(req)
-	if err != nil {
-		return fmt.Errorf("tsmux daemon is not running")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -240,36 +250,66 @@ func (c *Config) post(path string, body any) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	cl := &http.Client{Timeout: 30 * time.Second}
-	resp, err := cl.Post("http://"+c.Router.PACListen+path, "application/json", bytes.NewReader(b))
+	resp, err := c.call(http.MethodPost, path, b, 30*time.Second)
 	if err != nil {
-		return Status{}, errDaemonDown
+		return Status{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		var e struct {
-			Error string `json:"error"`
-		}
-		json.NewDecoder(resp.Body).Decode(&e)
-		if e.Error == "" {
-			e.Error = resp.Status
-		}
-		return Status{}, fmt.Errorf("%s", e.Error)
+	if err := apiError(resp); err != nil {
+		return Status{}, err
 	}
 	var st Status
 	return st, json.NewDecoder(resp.Body).Decode(&st)
+}
+
+// call sends one request to the daemon with the install's token. A missing
+// token file is not fatal here: the daemon's 401 says more than "no such file".
+func (c *Config) call(method, path string, body []byte, timeout time.Duration) (*http.Response, error) {
+	tok, err := readToken(c.TokenPath())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	req, err := http.NewRequest(method, "http://"+c.Router.PACListen+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	setToken(req, tok)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return nil, errDaemonDown
+	}
+	return resp, nil
+}
+
+func apiError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	var e struct {
+		Error string `json:"error"`
+	}
+	json.NewDecoder(resp.Body).Decode(&e)
+	if e.Error == "" {
+		e.Error = resp.Status
+	}
+	return fmt.Errorf("%s", e.Error)
 }
 
 var errDaemonDown = fmt.Errorf("tsmux daemon is not running (start it with `tsmux up`)")
 
 // FetchStatus reads the running daemon's status, or reports that it is down.
 func (c *Config) FetchStatus() ([]Status, error) {
-	cl := &http.Client{Timeout: 3 * time.Second}
-	resp, err := cl.Get(c.StatusURL())
+	resp, err := c.call(http.MethodGet, "/status", nil, 3*time.Second)
 	if err != nil {
-		return nil, errDaemonDown
+		return nil, err
 	}
 	defer resp.Body.Close()
+	if err := apiError(resp); err != nil {
+		return nil, err
+	}
 	var out []Status
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, err

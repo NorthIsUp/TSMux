@@ -15,15 +15,19 @@ func post(t *testing.T, h http.Handler, path, body string) *httptest.ResponseRec
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:43180"+path, strings.NewReader(body))
 	r.Host = "127.0.0.1:43180"
 	r.Header.Set("Content-Type", "application/json")
+	setToken(r, testToken)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
 }
 
+const testToken = "test-token"
+
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:43180"+path, nil)
 	r.Host = "127.0.0.1:43180"
+	setToken(r, testToken)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	return w
@@ -31,7 +35,7 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 
 func TestStatusEndpoint(t *testing.T) {
 	cfg := tempConfig(t, twoProfiles)
-	w := get(t, cfg.LocalHandler(NewManager(cfg, false)), "/status")
+	w := get(t, cfg.LocalHandler(NewManager(cfg, false), testToken), "/status")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
@@ -55,7 +59,7 @@ func TestShutdownEndpoint(t *testing.T) {
 	// A daemon nobody wired a stop into (the CLI's one-shot commands) has to
 	// say so rather than pretend it is going away.
 	m := NewManager(cfg, false)
-	w := post(t, cfg.LocalHandler(m), "/shutdown", "")
+	w := post(t, cfg.LocalHandler(m, testToken), "/shutdown", "")
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("no stop hook: status = %d, want 503", w.Code)
 	}
@@ -65,7 +69,7 @@ func TestShutdownEndpoint(t *testing.T) {
 
 	stopped := make(chan struct{})
 	m.OnStop(func() { close(stopped) })
-	w = post(t, cfg.LocalHandler(m), "/shutdown", "")
+	w = post(t, cfg.LocalHandler(m, testToken), "/shutdown", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
@@ -81,7 +85,7 @@ func TestShutdownEndpoint(t *testing.T) {
 
 func TestPrefsEndpointErrors(t *testing.T) {
 	cfg := tempConfig(t, twoProfiles)
-	h := cfg.LocalHandler(NewManager(cfg, false))
+	h := cfg.LocalHandler(NewManager(cfg, false), testToken)
 	for _, tc := range []struct {
 		name, path, body string
 		want             int
@@ -107,7 +111,7 @@ func TestPrefsEndpointErrors(t *testing.T) {
 
 func TestGuardRejectsCrossSiteWrites(t *testing.T) {
 	cfg := tempConfig(t, twoProfiles)
-	h := cfg.LocalHandler(NewManager(cfg, false))
+	h := cfg.LocalHandler(NewManager(cfg, false), testToken)
 	for _, tc := range []struct {
 		name, ctype, fetchSite string
 		want                   int
@@ -120,6 +124,7 @@ func TestGuardRejectsCrossSiteWrites(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:43180/prefs", strings.NewReader("{"))
 			r.Host = "127.0.0.1:43180"
+			setToken(r, testToken)
 			if tc.ctype != "" {
 				r.Header.Set("Content-Type", tc.ctype)
 			}

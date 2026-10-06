@@ -134,7 +134,11 @@ func cmdUp() *cobra.Command {
 			}
 			defer m.Close()
 
-			closeAll, err := tsmux.Serve(cfg, m)
+			token, err := cfg.EnsureAPIToken()
+			if err != nil {
+				return fmt.Errorf("api token: %w", err)
+			}
+			closeAll, err := tsmux.Serve(cfg, m, cfg.LocalHandler(m, token))
 			if err != nil {
 				return err
 			}
