@@ -7,6 +7,8 @@ import TSMuxKit
 struct RemovedProfile: Decodable, Sendable {
   let removed: String
   let purged: Bool
+  /// Set when a purge could not log the device out on its control server.
+  let warning: String?
 }
 
 struct DoctorReport: Decodable, Sendable {

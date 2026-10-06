@@ -17,10 +17,13 @@ struct RemoveTailnetSheet: View {
       )
       .fixedSize(horizontal: false, vertical: true)
       Toggle("Also delete saved credentials", isOn: $purge)
-      Text("Leave this off to keep the saved login so re-adding does not need a new sign-in.")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      Text(
+        "Turning this on also logs the device out of the tailnet. Leave it off to keep the "
+          + "saved login so re-adding does not need a new sign-in."
+      )
+      .font(.footnote)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
       Spacer()
       HStack {
         Spacer()
@@ -30,7 +33,7 @@ struct RemoveTailnetSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 440, height: 240)
+    .frame(width: 440, height: 260)
   }
 
   private func remove() {
@@ -41,9 +44,15 @@ struct RemoveTailnetSheet: View {
     dismiss()
     Task {
       let outcome = await model.mutateProfiles { [args] in
-        CLI.json(RemovedProfile.self, args, timeout: 20)
+        // Purging logs out on the control server first, which can take up to 15s.
+        CLI.json(RemovedProfile.self, args, timeout: 40)
       }
-      if case .failure(let e) = outcome { Alert.show("Could not remove \(name)", e.message) }
+      switch outcome {
+      case .success(let r):
+        if let w = r.warning { Alert.show("Removed \(name), but not logged out", w) }
+      case .failure(let e):
+        Alert.show("Could not remove \(name)", e.message)
+      }
     }
   }
 }

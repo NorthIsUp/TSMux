@@ -69,6 +69,14 @@ public struct TunnelResponse: Codable, Sendable {
   }
 }
 
+/// The body of a `/profiles/…` edit. `warning` is set when the edit went
+/// through but something the user should know about did not, such as a removed
+/// tailnet that could not be logged out on its control server.
+public struct ProfileEditResult: Decodable, Sendable, Equatable {
+  public let ok: Bool
+  public let warning: String?
+}
+
 public struct TunnelError: Error, Sendable, Equatable, LocalizedError {
   public let message: String
   public init(message: String) { self.message = message }

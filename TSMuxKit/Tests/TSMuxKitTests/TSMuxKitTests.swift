@@ -104,6 +104,13 @@ import Testing
     #expect(throws: TunnelError(message: #"no profile "x""#)) { try r.decode([ProfileStatus].self) }
   }
 
+  @Test func removeCarriesLogoutWarning() throws {
+    let warned = TunnelResponse(code: 200, body: #"{"ok":true,"warning":"could not log out"}"#)
+    #expect(try warned.decode(ProfileEditResult.self).warning == "could not log out")
+    let clean = TunnelResponse(code: 200, body: #"{"ok":true}"#)
+    #expect(try clean.decode(ProfileEditResult.self) == ProfileEditResult(ok: true, warning: nil))
+  }
+
   @Test func prefsBodyOmitsUnsetFields() throws {
     var p = PrefsChange(profile: "home")
     p.acceptRoutes = true
