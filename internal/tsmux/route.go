@@ -44,9 +44,10 @@ func (c *Config) Route(hostport string) (*Match, error) {
 				}
 			}
 		}
-		// An exit node owns the default route, so a literal no profile
-		// claims has an unambiguous home.
-		if !c.Security.AllowIPLiterals && c.exitProfileLocked() == nil {
+		if exit := c.exitProfileLocked(); exit != nil && exitCarriesIP(ip, c.exit.AllowLAN) {
+			return &Match{exit, "ip literal to " + exit.Name + " exit node"}, nil
+		}
+		if !c.Security.AllowIPLiterals {
 			return nil, fmt.Errorf("%s: IP literals are not routable; add it to a profile's ip_routes or set security.allow_ip_literals", host)
 		}
 		return c.fallback(host, "ip literal")
@@ -90,13 +91,58 @@ func (c *Config) Route(hostport string) (*Match, error) {
 		}
 	}
 
+	if exit := c.exitProfileLocked(); exit != nil && exitCarriesName(host, c.exit.AllowLAN) {
+		return &Match{exit, "fallback to " + exit.Name + " exit node"}, nil
+	}
 	return c.fallback(host, "fallback")
 }
 
-func (c *Config) fallback(host, why string) (*Match, error) {
-	if p := c.exitProfileLocked(); p != nil {
-		return &Match{p, why + " to " + p.Name + " exit node"}, nil
+// Destinations an exit node never carries, so the PAC sends them DIRECT and
+// the router refuses them: this host, the link, and Tailscale's own ranges,
+// where one address is a different machine in each tailnet.
+var exitNever = prefixes("0.0.0.0/32", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
+	"::/128", "::1/128", "fe80::/10", "fd7a:115c:a1e0::/48")
+
+// exitLAN is what "allow local network access" keeps off the exit node.
+var exitLAN = prefixes("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+
+// The PAC mirrors exitCarriesIP and exitCarriesName in JavaScript;
+// TestPACExitNode holds the two together.
+func exitCarriesIP(ip netip.Addr, allowLAN bool) bool {
+	if ip.Is4In6() {
+		return false
 	}
+	for _, p := range exitNever {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	if allowLAN {
+		for _, p := range exitLAN {
+			if p.Contains(ip) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func exitCarriesName(host string, allowLAN bool) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".local") {
+		return false
+	}
+	return !allowLAN || strings.Contains(host, ".")
+}
+
+func prefixes(cidrs ...string) []netip.Prefix {
+	out := make([]netip.Prefix, len(cidrs))
+	for i, s := range cidrs {
+		out[i] = netip.MustParsePrefix(s)
+	}
+	return out
+}
+
+func (c *Config) fallback(host, why string) (*Match, error) {
 	if !c.Security.AllowCrossProfileFallback || len(c.sorted) == 0 {
 		return nil, fmt.Errorf("%s: no profile claims this host", host)
 	}

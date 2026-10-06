@@ -59,3 +59,22 @@ func TestRefreshExitPicksFirstInConfigOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestExitCarriesName(t *testing.T) {
+	for _, tc := range []struct {
+		host     string
+		allowLAN bool
+		want     bool
+	}{
+		{"example.com", false, true},
+		{"example.com", true, true},
+		{"localhost", false, false},
+		{"printer.local", false, false},
+		{"nas", false, true},
+		{"nas", true, false},
+	} {
+		if got := exitCarriesName(tc.host, tc.allowLAN); got != tc.want {
+			t.Errorf("exitCarriesName(%q, %v) = %v, want %v", tc.host, tc.allowLAN, got, tc.want)
+		}
+	}
+}

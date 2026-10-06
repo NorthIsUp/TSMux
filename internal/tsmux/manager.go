@@ -116,6 +116,11 @@ type Manager struct {
 
 	mu    sync.RWMutex
 	nodes map[string]*Node
+
+	// exitMu serialises refreshExit, which every watch loop and SetPrefs
+	// call: without it a caller holding an older snapshot can write its
+	// stale pick over a newer one.
+	exitMu sync.Mutex
 }
 
 func NewManager(cfg *Config, verbose bool) *Manager {
@@ -303,6 +308,8 @@ func effectiveExit(pr *ipn.Prefs) (id string, allowLAN bool) {
 // that is using an exit node. Several can have one selected, but a host has a
 // single default route; the status's exit_profile tells the UI which won.
 func (m *Manager) refreshExit() {
+	m.exitMu.Lock()
+	defer m.exitMu.Unlock()
 	var r ExitRoute
 	for _, p := range m.cfg.Ordered() {
 		n, err := m.Node(p.Name)
