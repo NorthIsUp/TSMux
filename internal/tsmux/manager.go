@@ -528,8 +528,11 @@ type TailnetLock struct {
 }
 
 // tailnetLockOf mirrors `tailscale lock status`: locked out means lock is on,
-// this node has both keys, and its node key carries no valid signature.
-func tailnetLockOf(st *ipnstate.TailnetLockStatus) *TailnetLock {
+// this node has both keys, and its node key carries no valid signature. Only a
+// Running node can tell: before the first netmap (Starting, NeedsLogin, a
+// stopped node) the backend has no self signature to check and reports every
+// node unsigned.
+func tailnetLockOf(st *ipnstate.TailnetLockStatus, running bool) *TailnetLock {
 	if st == nil {
 		return nil
 	}
@@ -540,7 +543,7 @@ func tailnetLockOf(st *ipnstate.TailnetLockStatus) *TailnetLock {
 	if st.NodeKey != nil && !st.NodeKey.IsZero() {
 		tl.NodeKey = st.NodeKey.String()
 	}
-	if st.Enabled && tl.NodeKey != "" && tl.PublicKey != "" && !st.NodeKeySigned {
+	if running && st.Enabled && tl.NodeKey != "" && tl.PublicKey != "" && !st.NodeKeySigned {
 		tl.LockedOut = true
 		tl.SignCommand = fmt.Sprintf("tailscale lock sign %s %s", tl.NodeKey, tl.PublicKey)
 	}
@@ -705,7 +708,7 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	if tl, err := lc.TailnetLockStatus(lctx); err == nil {
-		s.TailnetLock = tailnetLockOf(tl)
+		s.TailnetLock = tailnetLockOf(tl, s.State == "Running")
 	}
 	return s
 }

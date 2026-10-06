@@ -88,7 +88,7 @@ struct TailnetView: View {
       }
     }
     .signInSheet($signIn)
-    .onChange(of: t.condition) { _, c in if c == .running { signIn = nil } }
+    .onChange(of: t.condition) { _, c in if c.isUp { signIn = nil } }
     .confirmationDialog(
       "Remove \(t.name)?", isPresented: $confirmRemove, titleVisibility: .visible
     ) {

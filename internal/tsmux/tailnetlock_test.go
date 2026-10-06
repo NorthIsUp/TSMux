@@ -15,6 +15,7 @@ func TestTailnetLockOf(t *testing.T) {
 	tests := []struct {
 		name       string
 		in         *ipnstate.TailnetLockStatus
+		notRunning bool
 		wantNil    bool
 		wantLocked bool
 		wantNode   bool
@@ -24,12 +25,14 @@ func TestTailnetLockOf(t *testing.T) {
 		{name: "disabled", in: &ipnstate.TailnetLockStatus{PublicKey: tlpub, NodeKey: &nk}, wantNode: true, wantPub: true},
 		{name: "signed", in: &ipnstate.TailnetLockStatus{Enabled: true, PublicKey: tlpub, NodeKey: &nk, NodeKeySigned: true}, wantNode: true, wantPub: true},
 		{name: "locked out", in: &ipnstate.TailnetLockStatus{Enabled: true, PublicKey: tlpub, NodeKey: &nk}, wantLocked: true, wantNode: true, wantPub: true},
+		// Before the first netmap the backend has no self signature to check.
+		{name: "unsigned but not running", in: &ipnstate.TailnetLockStatus{Enabled: true, PublicKey: tlpub, NodeKey: &nk}, notRunning: true, wantNode: true, wantPub: true},
 		// Not logged in yet: no node key, so nothing an admin could sign.
 		{name: "enabled before login", in: &ipnstate.TailnetLockStatus{Enabled: true, PublicKey: tlpub}, wantPub: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tailnetLockOf(tt.in)
+			got := tailnetLockOf(tt.in, !tt.notRunning)
 			if tt.wantNil {
 				if got != nil {
 					t.Fatalf("got %+v, want nil", got)

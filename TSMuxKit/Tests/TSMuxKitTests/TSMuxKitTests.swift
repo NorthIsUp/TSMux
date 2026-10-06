@@ -62,6 +62,11 @@ import Testing
     #expect(s.isUp == up)
   }
 
+  @Test func onlyRunningAndLockedOutAreUp() {
+    let up = ProfileStatus.Condition.allCases.filter(\.isUp)
+    #expect(Set(up) == [.running, .lockedOut])
+  }
+
   @Test func groupsPeopleBeforeTagsOnlineFirst() throws {
     let groups = deviceGroups(try #require(try fixture().first?.devices))
     #expect(groups.map(\.name) == ["user@example.com", "tag:server"])

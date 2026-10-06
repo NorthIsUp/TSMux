@@ -155,6 +155,14 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
     // lockedOut: logged in and Running, but tailnet lock hides every peer until
     // an admin signs this node.
     case running, starting, needsLogin, needsApproval, lockedOut, stopped, failed
+
+    /// Signed in and up, whether or not tailnet lock lets it reach anything.
+    public var isUp: Bool {
+      switch self {
+      case .running, .lockedOut: return true
+      case .starting, .needsLogin, .needsApproval, .stopped, .failed: return false
+      }
+    }
   }
 
   public var condition: Condition {
@@ -175,7 +183,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
 
   /// The node is up, whether or not tailnet lock lets it reach anything — what
   /// a connect switch reflects, as opposed to whether the tailnet is healthy.
-  public var isUp: Bool { condition == .running || condition == .lockedOut }
+  public var isUp: Bool { condition.isUp }
 
   public var name: String { displayName.isEmpty ? profile : displayName }
 
