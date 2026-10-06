@@ -63,12 +63,16 @@ final class TunnelModel {
   /// Installs the VPN configuration on first use, which is when iOS asks the
   /// user to allow it, then starts the tunnel and waits for it to come up.
   private func start() async throws {
-    if isConnected { return }
+    // Disconnecting in Settings clears on-demand and Settings can delete the
+    // configuration; the manager loaded at launch shows neither.
+    manager = try await NETunnelProviderManager.loadAllFromPreferences().first
     let m = manager ?? NETunnelProviderManager()
     // Configurations saved before on-demand existed, and ones the user
-    // turned off, come through here too: on-demand is what brings the
-    // extension back after iOS kills it.
-    if !m.isEnabled || m.protocolConfiguration == nil || !m.isOnDemandEnabled {
+    // turned off, come through here too, even while connected: on-demand is
+    // what brings the extension back after iOS kills it.
+    if !m.isEnabled || m.protocolConfiguration == nil || !m.isOnDemandEnabled
+      || (m.onDemandRules ?? []).isEmpty
+    {
       if !m.isEnabled || m.protocolConfiguration == nil {
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = (Bundle.main.bundleIdentifier ?? "") + ".tunnel"
@@ -86,6 +90,8 @@ final class TunnelModel {
       try await m.loadFromPreferences()
       manager = m
     }
+    updateStatus()
+    if isConnected { return }
     // Saving with on-demand on may already have started it.
     if [.disconnected, .invalid].contains(m.connection.status) {
       try m.connection.startVPNTunnel()
@@ -100,6 +106,9 @@ final class TunnelModel {
   /// On-demand goes off first: a tunnel stopped with it still on is
   /// restarted by iOS straight away.
   private func stop() async {
+    if let fresh = try? await NETunnelProviderManager.loadAllFromPreferences().first {
+      manager = fresh
+    }
     guard let m = manager else { return }
     if m.isOnDemandEnabled {
       m.isOnDemandEnabled = false
