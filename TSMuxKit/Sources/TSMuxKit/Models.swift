@@ -21,12 +21,16 @@ public struct Device: Decodable, Sendable, Identifiable, Hashable {
   public let tags: [String]?
   public let online: Bool
   public let exitNode: Bool?
+  /// Host keys the device's Tailscale SSH server advertises; an SSH client
+  /// pins these rather than asking the user to trust a fingerprint.
+  public let sshHostKeys: [String]?
 
   public var id: String { name }
 
   enum CodingKeys: String, CodingKey {
     case name, hostname, ips, os, owner, tags, online
     case exitNode = "exit_node"
+    case sshHostKeys = "ssh_host_keys"
   }
 
   /// What a plain click copies: something you can paste into a browser.

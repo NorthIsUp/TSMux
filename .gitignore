@@ -9,3 +9,5 @@ ios/Tunnel/Info.plist
 ios/.build/
 ios/.build-dev/
 ios/build/
+TSMuxShell/.build/
+TSMuxShell/TSMuxSSH.xcframework/

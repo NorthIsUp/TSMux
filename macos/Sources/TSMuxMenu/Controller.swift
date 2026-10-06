@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Sparkle
 import TSMuxKit
+import TSMuxShell
 
 // AppKit NSStatusItem + NSMenu, not SwiftUI MenuBarExtra: MenuBarExtra has no
 // menuWillOpen hook, no per-item tooltips and no working alternates, which this
@@ -555,13 +556,15 @@ final class Controller: NSObject, NSMenuDelegate {
     for (i, group) in deviceGroups(devices).enumerated() {
       if i > 0 { menu.addItem(.separator()) }
       menu.addItem(disabled(group.name))
-      for d in group.devices { addDeviceVariants(d, to: menu) }
+      for d in group.devices { addDeviceVariants(d, to: menu, profile: p) }
     }
+    menu.addItem(.separator())
+    menu.addItem(disabled("⌥ copy IP   ⇧⌥ copy name   ⌘ open shell"))
     root.submenu = menu
     sub.addItem(root)
   }
 
-  private func addDeviceVariants(_ d: Device, to menu: NSMenu) {
+  private func addDeviceVariants(_ d: Device, to menu: NSMenu, profile: ProfileStatus) {
     let dot = d.online ? "🟢" : "⚪️"
     let exit = d.exitNode == true ? "  ⇥" : ""
     let name = "\(dot)  \(d.shortName)\(exit)"
@@ -589,6 +592,24 @@ final class Controller: NSObject, NSMenuDelegate {
         "\(d.shortName), \(d.online ? "online" : "offline"), copies \(v.1 ?? "nothing")")
       menu.addItem(mi)
     }
+    let shell = NSMenuItem(title: name, action: #selector(openShell(_:)), keyEquivalent: "")
+    shell.target = self
+    shell.keyEquivalentModifierMask = [.command]
+    shell.isAlternate = true
+    shell.attributedTitle = Self.rowWithHint(name, "ssh")
+    shell.isEnabled = profile.socks5Proxy != nil
+    shell.representedObject = profile.socks5Proxy.map {
+      ShellLauncher.Target(
+        device: d.name, host: d.primaryIP ?? d.name, socksAddr: $0,
+        hostKeys: d.sshHostKeys ?? [], tailnet: profile.profile)
+    }
+    shell.setAccessibilityLabel("\(d.shortName), open an SSH shell")
+    menu.addItem(shell)
+  }
+
+  @objc private func openShell(_ sender: NSMenuItem) {
+    guard let target = sender.representedObject as? ShellLauncher.Target else { return }
+    ShellWindows.open(target)
   }
 
   /// A menu row with a secondary value pinned to the right. The tab stop is

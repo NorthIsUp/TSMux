@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,44 +11,40 @@ import (
 	"testing"
 )
 
-// Ports the kernel hands out, so the test runs beside a live daemon and
-// beside other test runs on the same machine.
+// Ports below the ephemeral range (49152+ on macOS, 32768+ on Linux): one the
+// kernel hands out for :0 can be taken again as the source port of any
+// outgoing connection, tsnet's included, between this check and the daemon
+// binding it.
 func testConfig(t *testing.T) string {
 	t.Helper()
-	free := func() (int, net.Listener) {
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ln.Addr().(*net.TCPAddr).Port, ln
-	}
 	var held []net.Listener
 	defer func() {
 		for _, ln := range held {
 			ln.Close()
 		}
 	}()
-	ports := make([]int, 3)
-	for i := range ports {
-		var ln net.Listener
-		ports[i], ln = free()
-		held = append(held, ln)
-	}
-	// The one profile added gets the base pair: base and base+1.
-	var base int
-	for range 50 {
-		p, ln := free()
-		held = append(held, ln)
-		if next, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p+1)); err == nil {
-			held = append(held, next)
-			base = p
-			break
+	bind := func(port int) bool {
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return false
 		}
+		held = append(held, ln)
+		return true
 	}
-	if base == 0 {
-		t.Fatal("no free consecutive port pair")
-	}
-	return fmt.Sprintf(`version: 1
+	// Five ports in a row: the router's three, then the one profile's pair.
+	for range 200 {
+		base := 20000 + rand.IntN(12000)
+		ok := true
+		for i := range 5 {
+			if !bind(base + i) {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			continue
+		}
+		return fmt.Sprintf(`version: 1
 router:
   http_proxy: 127.0.0.1:%d
   socks5_proxy: 127.0.0.1:%d
@@ -56,7 +53,10 @@ router:
   profile_socks5_proxy_base: %d
   profile_hostname_base: tsmux
 profiles: {}
-`, ports[0], ports[1], ports[2], base, base+1)
+`, base, base+1, base+2, base+3, base+4)
+	}
+	t.Fatal("no five free ports in a row below the ephemeral range")
+	return ""
 }
 
 func mustCall(t *testing.T, method, path string, body any) response {
