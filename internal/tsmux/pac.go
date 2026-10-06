@@ -34,20 +34,23 @@ func (c *Config) PAC() string {
 	// rather than letting isInNet() trigger a DNS lookup on every domain.
 	b.WriteString("  var tsmuxIsIP = /^[0-9]{1,3}(\\.[0-9]{1,3}){3}$/.test(host);\n")
 
+	proxy := func(p *Profile) string {
+		return fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
+	}
+	for _, r := range c.domainRulesLocked() {
+		apex := strings.TrimPrefix(r.suffix, ".")
+		b.WriteString(fmt.Sprintf("  if (dnsDomainIs(host, %q) || host === %q) return %q; // %s %s\n",
+			r.suffix, apex, proxy(r.profile), r.profile.Name, r.kind))
+	}
+	for _, r := range c.ipRulesLocked() {
+		if ip, mask, ok := cidrToPAC(r.pfx.String()); ok {
+			b.WriteString(fmt.Sprintf("  if (tsmuxIsIP && isInNet(host, %q, %q)) return %q; // %s %s\n",
+				ip, mask, proxy(r.profile), r.profile.Name, r.kind))
+		}
+	}
 	for _, p := range c.Ordered() {
-		proxy := fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
-		for _, s := range p.Suffixes {
-			apex := strings.TrimPrefix(s, ".")
-			b.WriteString(fmt.Sprintf("  if (dnsDomainIs(host, %q) || host === %q) return %q; // %s\n",
-				s, apex, proxy, p.Name))
-		}
-		for _, r := range p.IPRoutes {
-			if ip, mask, ok := cidrToPAC(r); ok {
-				b.WriteString(fmt.Sprintf("  if (tsmuxIsIP && isInNet(host, %q, %q)) return %q; // %s\n", ip, mask, proxy, p.Name))
-			}
-		}
 		if p.MatchRoot {
-			b.WriteString(fmt.Sprintf("  if (isPlainHostName(host)) return %q; // %s match_root\n", proxy, p.Name))
+			b.WriteString(fmt.Sprintf("  if (isPlainHostName(host)) return %q; // %s match_root\n", proxy(p), p.Name))
 		}
 	}
 	b.WriteString("  return \"DIRECT\";\n}\n")

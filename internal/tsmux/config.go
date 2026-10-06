@@ -34,7 +34,8 @@ type Config struct {
 
 	// ponytail: one config-wide RWMutex; split it if dial rates ever notice.
 	// Guards the mutable part of a loaded config: the suffix lists, which the
-	// daemon appends to when it learns a tailnet's MagicDNS suffix.
+	// daemon appends to when it learns a tailnet's MagicDNS suffix, and each
+	// profile's learned split-DNS domains and subnet routes.
 	mu sync.RWMutex
 }
 
@@ -80,6 +81,11 @@ type Profile struct {
 	SOCKSPort    int      `yaml:"socks5_proxy_port" json:"socks5_proxy_port"`
 
 	routes []netip.Prefix
+
+	// Split-DNS domains and subnet routes the running node learned from its
+	// netmap. In memory only, guarded by Config.mu.
+	learnedSuffixes []string
+	learnedRoutes   []netip.Prefix
 }
 
 // Fallback is the profile used when nothing matches and cross-profile
