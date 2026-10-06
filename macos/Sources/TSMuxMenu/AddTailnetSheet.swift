@@ -273,7 +273,7 @@ struct AddTailnetSheet: View {
   private func remove(_ key: String) {
     Task {
       await model.mutateProfiles {
-        CLI.run(["--json", "profile", "rm", key, "--purge"], timeout: 20)
+        CLI.run(["--json", "profile", "rm", key, "--purge"], timeout: 40)
       }
     }
   }

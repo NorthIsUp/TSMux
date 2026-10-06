@@ -160,7 +160,8 @@ final class TunnelModel {
 
   func remove(_ profile: String) async {
     await perform {
-      _ = try await send(.removeProfile(profile)).decode([String: Bool].self)
+      let result = try await send(.removeProfile(profile)).decode(ProfileEditResult.self)
+      if let warning = result.warning { lastError = warning }
       UNUserNotificationCenter.current().removePendingNotificationRequests(
         withIdentifiers: [expiryID(profile)])
       await refresh()

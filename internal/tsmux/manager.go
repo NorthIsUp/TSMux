@@ -165,7 +165,7 @@ func (m *Manager) startOne(ctx context.Context, p *Profile) error {
 		AuthKey:    p.AuthKey(),
 		ControlURL: p.ControlURL,
 		Logf:       func(string, ...any) {},
-		UserLogf:   func(f string, a ...any) { log.Printf("["+p.Name+"] "+f, a...) },
+		UserLogf:   redactedLogf("[" + p.Name + "] "),
 	}
 	if m.verbose {
 		srv.Logf = srv.UserLogf
@@ -248,7 +248,7 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 				if st.AuthURL != "" {
 					if st.AuthURL != announced {
 						announced = st.AuthURL
-						log.Printf("[%s] needs login: %s", name, st.AuthURL)
+						log.Printf("[%s] needs login: %s", name, RedactURL(st.AuthURL))
 					}
 					n.setAuthURL(st.AuthURL)
 				}
