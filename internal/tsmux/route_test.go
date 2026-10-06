@@ -92,3 +92,39 @@ func TestRouteConcurrentSuffixLearn(t *testing.T) {
 	}
 	<-done
 }
+
+func TestRouteExitNodeFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		exit      ExitRoute
+		host      string
+		want      string // "" means refused
+		wantMatch string
+	}{
+		{"public name, no exit node", ExitRoute{}, "example.com", "", ""},
+		{"public ip, no exit node", ExitRoute{}, "1.1.1.1", "", ""},
+		{"public name via exit", ExitRoute{Profile: "home"}, "example.com", "home", "fallback to home exit node"},
+		{"public ip via exit", ExitRoute{Profile: "home"}, "1.1.1.1:443", "home", "ip literal to home exit node"},
+		{"claimed suffix beats exit", ExitRoute{Profile: "home"}, "box.work.ts.net", "work", "suffix .work.ts.net"},
+		{"ip_route beats exit", ExitRoute{Profile: "home"}, "100.64.1.5", "work", "ip_route 100.64.0.0/16"},
+		{"exit profile gone", ExitRoute{Profile: "gone"}, "example.com", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := cfg(t)
+			c.SetExitRoute(tc.exit)
+			m, err := c.Route(tc.host)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatalf("expected refusal, got %s (%s)", m.Profile.Name, m.Reason)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Profile.Name != tc.want || m.Reason != tc.wantMatch {
+				t.Errorf("got %s (%s), want %s (%s)", m.Profile.Name, m.Reason, tc.want, tc.wantMatch)
+			}
+		})
+	}
+}

@@ -145,3 +145,70 @@ func TestPACPicksUpLearnedSuffix(t *testing.T) {
 		t.Errorf("got %q, want %q", got[0], want)
 	}
 }
+
+// With an exit node in use, public traffic has to reach that profile's proxy,
+// or the exit node the user picked carries nothing.
+func TestPACExitNode(t *testing.T) {
+	const (
+		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
+		work = "PROXY 127.0.0.1:43130; SOCKS5 127.0.0.1:43131"
+	)
+	for _, tc := range []struct {
+		name  string
+		route ExitRoute
+		cases map[string]string
+	}{
+		{"none", ExitRoute{}, map[string]string{
+			"example.com": "DIRECT", "1.1.1.1": "DIRECT", "192.168.1.1": "DIRECT",
+		}},
+		{"home", ExitRoute{Profile: "home"}, map[string]string{
+			"example.com":     home,
+			"1.1.1.1":         home,
+			"192.168.1.1":     home, // no LAN access: the LAN goes out the exit node too
+			"box.work.ts.net": work, // tailnet names still go to their own tailnet
+			"laptop":          work, // match_root still wins
+			"100.64.1.5":      work,
+			"localhost":       "DIRECT",
+			"127.0.0.1":       "DIRECT",
+			"printer.local":   "DIRECT",
+		}},
+		{"home allow LAN", ExitRoute{Profile: "home", AllowLAN: true}, map[string]string{
+			"example.com": home,
+			"1.1.1.1":     home,
+			"192.168.1.1": "DIRECT",
+			"10.1.2.3":    "DIRECT",
+			"172.20.0.1":  "DIRECT",
+			"172.32.0.1":  home,
+			"100.64.1.5":  work,
+		}},
+		{"removed profile", ExitRoute{Profile: "gone"}, map[string]string{
+			"example.com": "DIRECT",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := pacCfg(t)
+			c.SetExitRoute(tc.route)
+			hosts := make([]string, 0, len(tc.cases))
+			for h := range tc.cases {
+				hosts = append(hosts, h)
+			}
+			got := runPAC(t, c, hosts)
+			for i, h := range hosts {
+				if want := tc.cases[h]; got[i] != want {
+					t.Errorf("%s -> %q, want %q", h, got[i], want)
+				}
+				if got[i] == "DIRECT" {
+					continue
+				}
+				m, err := c.Route(h)
+				if err != nil {
+					t.Errorf("%s: PAC proxies it but Route refuses: %v", h, err)
+					continue
+				}
+				if !strings.Contains(got[i], strconv.Itoa(m.Profile.HTTPPort)) {
+					t.Errorf("%s: PAC says %q, Route says %s", h, got[i], m.Profile.Name)
+				}
+			}
+		})
+	}
+}

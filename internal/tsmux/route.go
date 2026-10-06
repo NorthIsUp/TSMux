@@ -44,7 +44,9 @@ func (c *Config) Route(hostport string) (*Match, error) {
 				}
 			}
 		}
-		if !c.Security.AllowIPLiterals {
+		// An exit node owns the default route, so a literal no profile
+		// claims has an unambiguous home.
+		if !c.Security.AllowIPLiterals && c.exitProfileLocked() == nil {
 			return nil, fmt.Errorf("%s: IP literals are not routable; add it to a profile's ip_routes or set security.allow_ip_literals", host)
 		}
 		return c.fallback(host, "ip literal")
@@ -92,6 +94,9 @@ func (c *Config) Route(hostport string) (*Match, error) {
 }
 
 func (c *Config) fallback(host, why string) (*Match, error) {
+	if p := c.exitProfileLocked(); p != nil {
+		return &Match{p, why + " to " + p.Name + " exit node"}, nil
+	}
 	if !c.Security.AllowCrossProfileFallback || len(c.sorted) == 0 {
 		return nil, fmt.Errorf("%s: no profile claims this host", host)
 	}

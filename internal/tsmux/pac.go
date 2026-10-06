@@ -22,7 +22,9 @@ import (
 
 // PAC renders a proxy auto-config that sends each tailnet's names to that
 // profile's own proxy port. Browsers then reach every tailnet at once, with
-// no system-wide interception of ordinary traffic.
+// no system-wide interception of ordinary traffic — unless an exit node is in
+// use, in which case everything else goes to that profile's proxy, whose
+// dials follow the node's default route out through the exit node.
 func (c *Config) PAC() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -35,7 +37,7 @@ func (c *Config) PAC() string {
 	b.WriteString("  var tsmuxIsIP = /^[0-9]{1,3}(\\.[0-9]{1,3}){3}$/.test(host);\n")
 
 	for _, p := range c.Ordered() {
-		proxy := fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
+		proxy := pacProxy(p)
 		for _, s := range p.Suffixes {
 			apex := strings.TrimPrefix(s, ".")
 			b.WriteString(fmt.Sprintf("  if (dnsDomainIs(host, %q) || host === %q) return %q; // %s\n",
@@ -50,8 +52,28 @@ func (c *Config) PAC() string {
 			b.WriteString(fmt.Sprintf("  if (isPlainHostName(host)) return %q; // %s match_root\n", proxy, p.Name))
 		}
 	}
-	b.WriteString("  return \"DIRECT\";\n}\n")
+	exit := c.exitProfileLocked()
+	if exit == nil {
+		b.WriteString("  return \"DIRECT\";\n}\n")
+		return b.String()
+	}
+	if c.exit.AllowLAN {
+		// Tailscale's "allow local network access": the LAN stays reachable
+		// directly while the exit node carries everything else.
+		b.WriteString("  if (isPlainHostName(host)) return \"DIRECT\";\n")
+		for _, r := range lanRanges {
+			ip, mask, _ := cidrToPAC(r)
+			b.WriteString(fmt.Sprintf("  if (tsmuxIsIP && isInNet(host, %q, %q)) return \"DIRECT\";\n", ip, mask))
+		}
+	}
+	b.WriteString(fmt.Sprintf("  return %q; // %s exit node\n}\n", pacProxy(exit), exit.Name))
 	return b.String()
+}
+
+var lanRanges = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"}
+
+func pacProxy(p *Profile) string {
+	return fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
 }
 
 func cidrToPAC(cidr string) (ip, mask string, ok bool) {

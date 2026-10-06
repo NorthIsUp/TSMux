@@ -43,6 +43,23 @@ type Node struct {
 	// independently, and one that just came back is worth noticing.
 	upMu sync.Mutex
 	upAt time.Time
+
+	// exitNode is the selected exit node while this tailnet is connected and
+	// running, empty otherwise: a stopped tailnet carries nothing.
+	exitNode string
+	exitLAN  bool
+}
+
+func (n *Node) setExit(id string, allowLAN bool) {
+	n.upMu.Lock()
+	n.exitNode, n.exitLAN = id, allowLAN
+	n.upMu.Unlock()
+}
+
+func (n *Node) exit() (id string, allowLAN bool) {
+	n.upMu.Lock()
+	defer n.upMu.Unlock()
+	return n.exitNode, n.exitLAN
 }
 
 func (n *Node) setAuthURL(u string) {
@@ -207,6 +224,7 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 	for ctx.Err() == nil {
 		tick := time.Second
 		if st, err := lc.StatusWithoutPeers(ctx); err == nil {
+			m.observeExit(ctx, n, lc, st.BackendState)
 			var request bool
 			request, emptyRuns = shouldRequestLogin(st.BackendState, st.AuthURL, n.AuthURL(), emptyRuns)
 			if request {
@@ -258,6 +276,49 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 		case <-ctx.Done():
 			return
 		case <-time.After(tick):
+		}
+	}
+}
+
+// observeExit tracks the node's exit node from its prefs. Polling catches
+// changes made behind the API's back, such as the tailnet going down; a failed
+// prefs read keeps the last answer rather than flapping the PAC.
+func (m *Manager) observeExit(ctx context.Context, n *Node, lc *local.Client, backendState string) {
+	if backendState != "Running" {
+		n.setExit("", false)
+	} else if pr, err := lc.GetPrefs(ctx); err == nil {
+		n.setExit(effectiveExit(pr))
+	}
+	m.refreshExit()
+}
+
+func effectiveExit(pr *ipn.Prefs) (id string, allowLAN bool) {
+	if !pr.WantRunning || pr.ExitNodeID == "" {
+		return "", false
+	}
+	return string(pr.ExitNodeID), pr.ExitNodeAllowLANAccess
+}
+
+// refreshExit points public traffic at the first profile, in config order,
+// that is using an exit node. Several can have one selected, but a host has a
+// single default route; the status's exit_profile tells the UI which won.
+func (m *Manager) refreshExit() {
+	var r ExitRoute
+	for _, p := range m.cfg.Ordered() {
+		n, err := m.Node(p.Name)
+		if err != nil {
+			continue
+		}
+		if id, lan := n.exit(); id != "" {
+			r = ExitRoute{Profile: p.Name, AllowLAN: lan}
+			break
+		}
+	}
+	if m.cfg.SetExitRoute(r) {
+		if r.Profile == "" {
+			log.Printf("public traffic goes direct")
+		} else {
+			log.Printf("[%s] public traffic goes through this tailnet's exit node", r.Profile)
 		}
 	}
 }
@@ -500,17 +561,20 @@ type Status struct {
 	SOCKS5     string   `json:"socks5_proxy"`
 	Err        string   `json:"error,omitempty"`
 
-	Tailnet        string           `json:"tailnet,omitempty"`
-	MagicDNSSuffix string           `json:"magic_dns_suffix,omitempty"`
-	SuffixConflict string           `json:"suffix_conflict,omitempty"`
-	User           *StatusUser      `json:"user,omitempty"`
-	KeyExpiry      *time.Time       `json:"key_expiry,omitempty"`
-	Health         []string         `json:"health,omitempty"`
-	ConnectedSince *time.Time       `json:"connected_since,omitempty"`
-	AdminURL       string           `json:"admin_url,omitempty"`
-	Prefs          *StatusPrefs     `json:"prefs,omitempty"`
-	ExitNodes      []ExitNodeOption `json:"exit_node_options,omitempty"`
-	Devices        []Device         `json:"devices,omitempty"`
+	Tailnet        string       `json:"tailnet,omitempty"`
+	MagicDNSSuffix string       `json:"magic_dns_suffix,omitempty"`
+	SuffixConflict string       `json:"suffix_conflict,omitempty"`
+	User           *StatusUser  `json:"user,omitempty"`
+	KeyExpiry      *time.Time   `json:"key_expiry,omitempty"`
+	Health         []string     `json:"health,omitempty"`
+	ConnectedSince *time.Time   `json:"connected_since,omitempty"`
+	AdminURL       string       `json:"admin_url,omitempty"`
+	Prefs          *StatusPrefs `json:"prefs,omitempty"`
+	// ExitProfile is the same on every profile's status: the one profile
+	// whose exit node public traffic actually uses, if any.
+	ExitProfile string           `json:"exit_profile,omitempty"`
+	ExitNodes   []ExitNodeOption `json:"exit_node_options,omitempty"`
+	Devices     []Device         `json:"devices,omitempty"`
 }
 
 // Device is one peer in the tailnet, for the GUI's device list. Owner and
@@ -587,6 +651,7 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 		MagicDNSSuffix: suffix,
 		SuffixConflict: conflict,
 		AdminURL:       adminURL(p.ControlURL),
+		ExitProfile:    m.cfg.ExitRoute().Profile,
 	}
 	lc, err := n.srv.LocalClient()
 	if err != nil {
@@ -712,8 +777,15 @@ func (m *Manager) SetPrefs(ctx context.Context, profile string, mp *ipn.MaskedPr
 			return Status{}, fmt.Errorf("unknown exit node %q", mp.ExitNodeID)
 		}
 	}
-	if _, err := lc.EditPrefs(ctx, mp); err != nil {
+	pr, err := lc.EditPrefs(ctx, mp)
+	if err != nil {
 		return Status{}, err
+	}
+	// Apply now rather than on the next watch tick, so the PAC and the status
+	// this call returns already agree with the new prefs.
+	if n, err := m.Node(profile); err == nil && !n.UpSince().IsZero() {
+		n.setExit(effectiveExit(pr))
+		m.refreshExit()
 	}
 	return m.StatusOf(ctx, profile)
 }
@@ -744,6 +816,7 @@ func (m *Manager) Close() error {
 		}
 	}
 	m.nodes = map[string]*Node{}
+	m.cfg.SetExitRoute(ExitRoute{})
 	return err
 }
 

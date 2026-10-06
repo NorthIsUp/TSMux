@@ -28,6 +28,32 @@ import Testing
     #expect(groups[0].devices.map(\.shortName) == ["laptop", "phone"])
   }
 
+  // (this profile, its exit node pick, exit_profile, expected override)
+  @Test(
+    arguments: [
+      ("home", "n1", "work", "Work"),
+      ("work", "n2", "work", nil),
+      ("home", "", "work", nil),
+      ("home", "n1", "", nil),
+    ] as [(String, String, String, String?)])
+  func exitNodeOverride(profile: String, pick: String, winner: String, want: String?) throws {
+    func status(_ name: String, _ display: String, _ exitNode: String) throws -> ProfileStatus {
+      let json = """
+        {"profile":"\(name)","display_name":"\(display)","state":"Running",
+         "exit_profile":"\(winner)",
+         "prefs":{"connected":true,"accept_routes":false,"accept_dns":true,
+                  "shields_up":false,"exit_node":"\(exitNode)","exit_node_allow_lan":false}}
+        """
+      return try JSONDecoder().decode(ProfileStatus.self, from: Data(json.utf8))
+    }
+    let all = [
+      try status("home", "Home", profile == "home" ? pick : ""),
+      try status("work", "Work", profile == "work" ? pick : "n2"),
+    ]
+    let me = try #require(all.first { $0.profile == profile })
+    #expect(me.exitNodeOverride(among: all) == want)
+  }
+
   @Test func errorBodiesThrowTheirMessage() {
     let r = TunnelResponse(code: 400, body: #"{"error":"no profile \"x\""}"#)
     #expect(throws: TunnelError(message: #"no profile "x""#)) { try r.decode([ProfileStatus].self) }

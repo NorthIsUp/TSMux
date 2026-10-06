@@ -244,6 +244,13 @@ struct AccountDetail: View {
         }
       }
       .pickerStyle(.menu)
+      if let other = profile.exitNodeOverride(among: model.profiles) {
+        Text(
+          "Not in use: public traffic goes through \(other)'s exit node. Only one can be active."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
       Toggle("Allow local network access", isOn: pref(\.exitNodeAllowLAN, flag: "exit-node-lan"))
         .disabled(profile.prefs?.exitNode.isEmpty ?? true)
     }
