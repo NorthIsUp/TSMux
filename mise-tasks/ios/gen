@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Generate ios/TSMux.xcodeproj from ios/project.yml"
+set -euo pipefail
+
+cd ios && xcodegen --quiet

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TSMuxKit
 
 /// Three panes in one frame. The whole point of the flow: the user types a
 /// name and nothing else — the DNS suffix is a result at the end, never input.
@@ -200,12 +201,15 @@ struct AddTailnetSheet: View {
     if model.configProfiles.isEmpty { args.append("--match-root") }
 
     pane = .bringingUp
-    let outcome = model.mutateProfiles { CLI.json(Profile.self, args, timeout: 20) }
-    if case .failure(let e) = outcome {
-      fatal = e.message
-      return
+    Task {
+      let outcome = await model.mutateProfiles { [args] in CLI.json(Profile.self, args, timeout: 20)
+      }
+      if case .failure(let e) = outcome {
+        fatal = e.message
+        return
+      }
+      poll()
     }
-    poll()
   }
 
   private func poll() {
@@ -271,8 +275,13 @@ struct AddTailnetSheet: View {
         return
       }
     }
-    model.mutateProfiles { CLI.run(["--json", "profile", "rm", key, "--purge"], timeout: 20) }
+    // Removal restarts the daemon, which takes seconds; the sheet shouldn't wait.
     dismiss()
+    Task { [key] in
+      await model.mutateProfiles {
+        CLI.run(["--json", "profile", "rm", key, "--purge"], timeout: 20)
+      }
+    }
   }
 
   private func runDoctor() {

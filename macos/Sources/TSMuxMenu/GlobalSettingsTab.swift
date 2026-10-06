@@ -1,6 +1,7 @@
 import AppKit
 import ServiceManagement
 import SwiftUI
+import TSMuxKit
 
 /// Per-profile rows appear here as read-only fleet summaries with a jump
 /// button, never as editable aggregates: one place to edit, plus the

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Unsigned iOS device build of the app and tunnel extension"
+#MISE depends=["ios:core", "ios:gen"]
+set -euo pipefail
+
+xcodebuild build -project ios/TSMux.xcodeproj -scheme TSMux \
+  -destination generic/platform=iOS -derivedDataPath ios/.build \
+  CODE_SIGNING_ALLOWED=NO -quiet

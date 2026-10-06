@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Sparkle
+import TSMuxKit
 
 // AppKit NSStatusItem + NSMenu, not SwiftUI MenuBarExtra: MenuBarExtra has no
 // menuWillOpen hook, no per-item tooltips and no working alternates, which this
@@ -548,23 +549,10 @@ final class Controller: NSObject, NSMenuDelegate {
     let menu = NSMenu()
     menu.autoenablesItems = false
 
-    // Tagged groups after people, each alphabetical; within a group the
-    // reachable devices come first, since those are the ones you can act on.
-    let groups = Dictionary(grouping: devices, by: \.group)
-    let ordered = groups.keys.sorted { a, b in
-      let at = a.hasPrefix("tag:")
-      let bt = b.hasPrefix("tag:")
-      return at == bt ? a.localizedStandardCompare(b) == .orderedAscending : !at
-    }
-    for (i, key) in ordered.enumerated() {
+    for (i, group) in deviceGroups(devices).enumerated() {
       if i > 0 { menu.addItem(.separator()) }
-      menu.addItem(disabled(key))
-      let sorted = (groups[key] ?? []).sorted {
-        $0.online == $1.online
-          ? $0.shortName.localizedStandardCompare($1.shortName) == .orderedAscending
-          : $0.online
-      }
-      for d in sorted { addDeviceVariants(d, to: menu) }
+      menu.addItem(disabled(group.name))
+      for d in group.devices { addDeviceVariants(d, to: menu) }
     }
     root.submenu = menu
     sub.addItem(root)

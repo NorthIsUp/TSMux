@@ -8,12 +8,16 @@ let package = Package(
     // Auto-update. The framework ships as a binary xcframework, so
     // scripts/build-app.sh copies it into Contents/Frameworks by hand —
     // SwiftPM links it but will not populate a bundle it did not assemble.
-    .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0")
+    .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0"),
+    .package(path: "../TSMuxKit"),
   ],
   targets: [
     .executableTarget(
       name: "TSMuxMenu",
-      dependencies: [.product(name: "Sparkle", package: "Sparkle")],
+      dependencies: [
+        .product(name: "Sparkle", package: "Sparkle"),
+        .product(name: "TSMuxKit", package: "TSMuxKit"),
+      ],
       path: "Sources/TSMuxMenu",
       // Each flag needs its own -Xlinker: these go through swiftc, which does
       // not know -rpath itself.

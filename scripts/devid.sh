@@ -6,8 +6,14 @@
 # Developer ID needs no provisioning profile, no registered bundle id and no app
 # record: the certificate is per team, so this signs any app from 4BJBDQVY6M.
 # Run after scripts/build-app.sh.
+# usage: devid.sh [--sign-only] [app]
+#   --sign-only: sign and verify, then stop. PRs use it to prove signing without
+#   waiting on notarization.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+SIGN_ONLY=
+[ "${1:-}" = --sign-only ] && { SIGN_ONLY=1; shift; }
 
 : "${ASC_KEY_ID:=238ATU74S4}"
 : "${ASC_ISSUER_ID:=98c62465-9650-49ec-afe4-23318e5c1ae1}"
@@ -20,7 +26,7 @@ ZIP="bin/TSMux-$VERSION-macos.zip"
 DMG="bin/TSMux-$VERSION.dmg"
 
 [ -d "$APP" ] || { echo "no $APP — run scripts/build-app.sh first" >&2; exit 1; }
-[ -f "$ASC_KEY_PATH" ] || { echo "no ASC key at $ASC_KEY_PATH" >&2; exit 1; }
+[ -n "$SIGN_ONLY" ] || [ -f "$ASC_KEY_PATH" ] || { echo "no ASC key at $ASC_KEY_PATH" >&2; exit 1; }
 
 notarize() {
   xcrun notarytool submit "$1" --wait \
@@ -44,6 +50,7 @@ do
 done
 codesign --force --timestamp --options runtime --sign "$DEVID" "$APP"
 codesign --verify --deep --strict "$APP"
+[ -z "$SIGN_ONLY" ] || { echo "signed $APP (not notarized)"; exit 0; }
 
 # notarytool takes an archive; stapler writes the ticket into the .app. So the
 # zip is rebuilt from the stapled bundle, or the download has no ticket in it.

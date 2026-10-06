@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TSMuxKit
 
 // Shared bits of the Settings window. Kept dumb: no state beyond a copy flash.
 

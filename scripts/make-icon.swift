@@ -8,15 +8,16 @@
 import AppKit
 import Foundation
 
-func drawIcon(size: CGFloat) -> NSImage {
+func drawIcon(size: CGFloat, fullBleed: Bool = false) -> NSImage {
   let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
     guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
     let s = size
 
-    // macOS app icons sit on a rounded square with a little breathing room.
-    let inset = s * 0.055
+    // macOS app icons sit on a rounded square with a little breathing room;
+    // iOS masks the corners itself and rejects any transparency.
+    let inset = fullBleed ? 0 : s * 0.055
     let rect = CGRect(x: inset, y: inset, width: s - inset * 2, height: s - inset * 2)
-    let radius = rect.width * 0.2237  // Apple's squircle-ish corner ratio
+    let radius = fullBleed ? 0 : rect.width * 0.2237  // Apple's squircle-ish corner ratio
     let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
     ctx.saveGState()
     ctx.addPath(path)
@@ -100,6 +101,24 @@ func drawIcon(size: CGFloat) -> NSImage {
 }
 
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "AppIcon.iconset"
+
+// A .png target is the iOS icon: one 1024px square with no alpha channel,
+// which App Store Connect requires.
+if out.hasSuffix(".png") {
+  let px = 1024
+  guard
+    let ctx = CGContext(
+      data: nil, width: px, height: px, bitsPerComponent: 8, bytesPerRow: 0,
+      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+  else { exit(1) }
+  NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+  drawIcon(size: CGFloat(px), fullBleed: true).draw(in: NSRect(x: 0, y: 0, width: px, height: px))
+  guard let cg = ctx.makeImage() else { exit(1) }
+  try NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])?
+    .write(to: URL(fileURLWithPath: out))
+  print("wrote \(out)")
+  exit(0)
+}
 try? FileManager.default.createDirectory(
   atPath: out, withIntermediateDirectories: true)
 

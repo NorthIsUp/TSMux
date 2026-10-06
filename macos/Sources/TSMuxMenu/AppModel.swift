@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import TSMuxKit
 
 // ponytail: one shared AppModel, no view-model-per-tab.
 
@@ -306,17 +307,39 @@ final class AppModel {
   /// from a terminal still holds the profiles, and refusing to act on it turns
   /// an ordinary "remove this tailnet" into an error the user cannot clear.
   private func stopDaemon() {
+    Self.awaitExit(beginStop())
+    finishStop()
+  }
+
+  /// The same, with the waiting off the main thread: it can take seconds, and
+  /// the menu and every open sheet freeze for as long as it blocks.
+  private func stopDaemonAsync() async {
+    let d = beginStop()
+    await Task.detached { Self.awaitExit(d) }.value
+    finishStop()
+  }
+
+  /// Returns our daemon if it was running; nil means one from elsewhere, or none.
+  private func beginStop() -> Process? {
     if pacApplied { restorePAC(silent: false) }
+    var ours: Process?
     if let d = daemon, d.isRunning {
       expectingExit = true
       d.terminate()
+      ours = d
+    }
+    daemon = nil
+    startDeadline = nil
+    return ours
+  }
+
+  private nonisolated static func awaitExit(_ d: Process?) {
+    if let d {
       let deadline = Date().addingTimeInterval(5)
       while d.isRunning && Date() < deadline { usleep(50_000) }
     } else {
       _ = CLI.run(["down"], timeout: 10)
     }
-    daemon = nil
-    startDeadline = nil
     // The process being gone is not the same as the port being free; the CLI
     // refuses to mutate while /status still answers.
     let deadline = Date().addingTimeInterval(8)
@@ -324,18 +347,35 @@ final class AppModel {
       if case .daemonDown = CLI.status() { break }
       usleep(100_000)
     }
+  }
+
+  private func finishStop() {
     status = .daemonDown
     notify()
   }
 
+  private var lastMutation: Task<Void, Never>?
+
   /// `profile add`/`rm` cannot run against a live daemon (D5), so bracket them.
+  /// The stop and the change itself run off the main thread, one at a time: a
+  /// cancel pressed mid-add must not remove the profile before the add lands.
   @discardableResult
-  func mutateProfiles<T>(_ body: () -> T) -> T {
+  func mutateProfiles<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+    let previous = lastMutation
+    let task = Task {
+      await previous?.value
+      return await mutateNow(body)
+    }
+    lastMutation = Task { _ = await task.value }
+    return await task.value
+  }
+
+  private func mutateNow<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
     // Any live daemon blocks the mutation, whether or not we started it.
     let wasRunning = daemonRunning
     let countBefore = configProfiles.count
-    if wasRunning { stopDaemon() }
-    let result = body()
+    if wasRunning { await stopDaemonAsync() }
+    let result = await Task.detached(operation: body).value
     profilesRevision += 1
     reloadConfigProfiles()
     // Adding a tailnet is a fresh statement of intent; emptying the config is
