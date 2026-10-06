@@ -84,6 +84,7 @@ extension ProfileStatus.Condition {
     case .starting: return "arrow.triangle.2.circlepath"
     case .needsLogin: return "exclamationmark.triangle.fill"
     case .needsApproval: return "hourglass"
+    case .lockedOut: return "lock.circle.fill"
     case .stopped: return "pause.circle"
     case .failed: return "xmark.octagon.fill"
     }
@@ -97,6 +98,7 @@ extension ProfileStatus.Condition {
     case .starting: return .systemBlue
     case .needsLogin: return .systemYellow
     case .needsApproval: return .systemOrange
+    case .lockedOut: return .systemOrange
     case .stopped: return nil
     case .failed: return .systemRed
     }
@@ -108,6 +110,7 @@ extension ProfileStatus.Condition {
     case .starting: return "Connecting…"
     case .needsLogin: return "Needs login"
     case .needsApproval: return "Waiting for approval"
+    case .lockedOut: return "Needs tailnet-lock signature"
     case .stopped: return "Stopped"
     case .failed: return "Error"
     }
@@ -166,9 +169,10 @@ enum Unavailable {
     """
 
   static let tailnetLock = """
-    Unavailable. The Tailscale library tsmux embeds (v1.102.4) exposes no \
-    tailnet-lock API, so tsmux can't sign or list locked nodes. Manage lock from \
-    the admin console, or from the official Tailscale client on another device.
+    Unavailable. Signing nodes and changing trusted keys need a trusted \
+    tailnet-lock key, which a tsmux node does not hold. tsmux does show when one \
+    of its own tailnets is locked out, under Accounts, with the keys and the \
+    command an admin runs on a trusted device to sign it.
     """
 }
 

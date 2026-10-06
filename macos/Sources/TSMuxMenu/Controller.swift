@@ -109,6 +109,9 @@ final class Controller: NSObject, NSMenuDelegate {
         label = "tsmux, \(ps.filter { $0.condition == .needsLogin }.count) tailnets need login"
       } else if ps.contains(where: { $0.condition == .failed }) {
         label = "tsmux, \(ps.filter { $0.condition == .failed }.count) tailnets have errors"
+      } else if ps.contains(where: { $0.condition == .lockedOut }) {
+        label =
+          "tsmux, \(ps.filter { $0.condition == .lockedOut }.count) tailnets need a tailnet-lock signature"
       } else {
         label = "tsmux, \(up) of \(total) tailnets connected"
       }
@@ -343,14 +346,14 @@ final class Controller: NSObject, NSMenuDelegate {
       guard let host = liveRows[p.profile] else { continue }
       let (symbol, color, label) = Self.appearance(p.condition, state: p.state)
       host.state.apply(
-        isOn: p.condition == .running,
-        enabled: p.condition == .running || p.prefs?.connected == false,
+        isOn: p.isUp,
+        enabled: p.isUp || p.prefs?.connected == false,
         symbol: symbol, tint: color,
         detail: p.condition == .running ? p.uptime : label)
     }
     if let host = liveRows[Self.daemonRowKey] {
       let running = model.daemonRunning
-      let anyUp = model.displayProfiles.contains { $0.condition == .running }
+      let anyUp = model.displayProfiles.contains(where: \.isUp)
       let (symbol, color, label) = Self.daemonAppearance(model.ui, anyUp: anyUp)
       host.state.apply(
         isOn: anyUp,
@@ -443,7 +446,7 @@ final class Controller: NSObject, NSMenuDelegate {
     // The master switch. "tsmux" alone did not say that turning it off takes
     // every tailnet with it.
     let running = model.daemonRunning
-    let anyOn = model.displayProfiles.contains { $0.condition == .running }
+    let anyOn = model.displayProfiles.contains(where: \.isUp)
     let (dSymbol, dColor, dLabel) = Self.daemonAppearance(model.ui, anyUp: anyOn)
     let (allRow, allHost) = NSMenuItem.toggleRow(
       title: "All tailnets",
@@ -619,7 +622,7 @@ final class Controller: NSObject, NSMenuDelegate {
       model.start()
       return
     }
-    for p in model.displayProfiles where (p.condition == .running) != on {
+    for p in model.displayProfiles where p.isUp != on {
       setConnected(p.profile, on)
     }
     model.refresh()
@@ -637,10 +640,10 @@ final class Controller: NSObject, NSMenuDelegate {
     // one off must not imply anything about the others. Only a tailnet that
     // has actually logged in can be toggled — for the rest the row's submenu
     // is where the login lives.
-    let toggleable = p.condition == .running || p.prefs?.connected == false
+    let toggleable = p.isUp || p.prefs?.connected == false
     let (top, host) = NSMenuItem.toggleRow(
       title: p.name,
-      isOn: p.condition == .running,
+      isOn: p.isUp,
       enabled: toggleable,
       symbol: symbol, tint: color,
       detail: p.condition == .running ? p.uptime : label,
@@ -665,6 +668,12 @@ final class Controller: NSObject, NSMenuDelegate {
       let mi = action(
         "Log in to this tailnet…", #selector(openLogin(_:)), symbol: "person.badge.key")
       mi.representedObject = url
+      sub.addItem(mi)
+    }
+    if p.condition == .lockedOut, let cmd = p.tailnetLock?.signCommand {
+      let mi = action("Copy tailnet-lock sign command", #selector(copyValue(_:)), symbol: "lock")
+      mi.representedObject = cmd
+      mi.toolTip = cmd
       sub.addItem(mi)
     }
     if sub.numberOfItems > 0 { sub.addItem(.separator()) }

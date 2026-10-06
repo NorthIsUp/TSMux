@@ -93,7 +93,7 @@ struct TailnetRow: View {
     switch tailnet.condition {
     case .running: .green
     case .starting: .yellow
-    case .needsLogin, .needsApproval: .orange
+    case .needsLogin, .needsApproval, .lockedOut: .orange
     case .stopped: .gray
     case .failed: .red
     }
@@ -107,6 +107,7 @@ struct TailnetRow: View {
     case .starting: return "Starting…"
     case .needsLogin: return "Sign in required"
     case .needsApproval: return "Waiting for admin approval"
+    case .lockedOut: return "Needs tailnet-lock signature"
     case .stopped: return "Off"
     case .failed: return tailnet.error ?? "Failed"
     }

@@ -76,6 +76,25 @@ public struct UserProfile: Decodable, Sendable, Hashable {
   }
 }
 
+/// This node's standing under tailnet lock. Keys are public: the node key and
+/// tailnet-lock key an admin needs to sign this node from a trusted device.
+public struct TailnetLock: Decodable, Sendable, Hashable {
+  public let enabled: Bool
+  public let signed: Bool
+  public let lockedOut: Bool
+  public let nodeKey: String?
+  public let publicKey: String?
+  public let signCommand: String?
+
+  enum CodingKeys: String, CodingKey {
+    case enabled, signed
+    case lockedOut = "locked_out"
+    case nodeKey = "node_key"
+    case publicKey = "public_key"
+    case signCommand = "sign_command"
+  }
+}
+
 public struct ProfileStatus: Decodable, Sendable, Identifiable {
   public let profile: String
   public let displayName: String
@@ -101,6 +120,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
   public let prefs: ProfilePrefs?
   public let exitNodeOptions: [ExitNodeOption]?
   public let devices: [Device]?
+  public let tailnetLock: TailnetLock?
 
   enum CodingKeys: String, CodingKey {
     case profile
@@ -126,18 +146,29 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
     case prefs
     case exitNodeOptions = "exit_node_options"
     case devices
+    case tailnetLock = "tailnet_lock"
   }
 
   public var id: String { profile }
 
   public enum Condition: Sendable, CaseIterable {
-    case running, starting, needsLogin, needsApproval, stopped, failed
+    // lockedOut: logged in and Running, but tailnet lock hides every peer until
+    // an admin signs this node.
+    case running, starting, needsLogin, needsApproval, lockedOut, stopped, failed
+
+    /// Signed in and up, whether or not tailnet lock lets it reach anything.
+    public var isUp: Bool {
+      switch self {
+      case .running, .lockedOut: return true
+      case .starting, .needsLogin, .needsApproval, .stopped, .failed: return false
+      }
+    }
   }
 
   public var condition: Condition {
     if let e = error, !e.isEmpty { return .failed }
     switch state {
-    case "Running": return .running
+    case "Running": return tailnetLock?.lockedOut == true ? .lockedOut : .running
     case "Starting": return .starting
     case "NeedsLogin":
       // An already-authenticated node reports NeedsLogin on every daemon start
@@ -149,6 +180,10 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
     default: return .stopped
     }
   }
+
+  /// The node is up, whether or not tailnet lock lets it reach anything — what
+  /// a connect switch reflects, as opposed to whether the tailnet is healthy.
+  public var isUp: Bool { condition.isUp }
 
   public var name: String { displayName.isEmpty ? profile : displayName }
 
@@ -186,7 +221,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
       socks5Proxy: "127.0.0.1:\(p.socks5ProxyPort)", error: nil,
       tailnet: nil, magicDNSSuffix: nil, suffixConflict: nil, user: nil,
       keyExpiry: nil, connectedSince: nil, healthMessages: nil, adminURL: nil, prefs: nil,
-      exitNodeOptions: nil, devices: nil)
+      exitNodeOptions: nil, devices: nil, tailnetLock: nil)
   }
 
   /// `self` keeps the wire's trailing dot; nothing user-facing wants it.
@@ -205,7 +240,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
   /// node is not running, because a stopped node has reported nothing yet and
   /// "no date" must not read as "never".
   public var daysUntilExpiry: Int? {
-    guard condition == .running, let d = expiryDate else { return nil }
+    guard isUp, let d = expiryDate else { return nil }
     return Calendar.current.dateComponents([.day], from: Date(), to: d).day
   }
 
