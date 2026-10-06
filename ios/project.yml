@@ -45,6 +45,9 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        # WireGuard is standard crypto and builds go to internal TestFlight only; without
+        # this every build waits on the compliance question. Revisit before a public release.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
       # A sibling of base: automatic Release signing fails headless.
       configs:
         Release:
