@@ -11,9 +11,11 @@ import (
 // proxies, one proxy pair per running profile, the PAC/API listener and the
 // configured tunnels. The returned func closes them all; on error, whatever
 // was already opened is closed before returning.
-func Serve(cfg *Config, m *Manager) (closeAll func(), err error) {
+func Serve(cfg *Config, m *Manager) (_ func(), err error) {
 	var closers []func()
-	closeAll = func() {
+	// Not the named result: an error return sets that to nil before the
+	// deferred cleanup below gets to call it.
+	closeAll := func() {
 		for _, f := range closers {
 			f()
 		}
