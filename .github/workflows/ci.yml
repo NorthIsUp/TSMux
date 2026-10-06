@@ -154,6 +154,10 @@ jobs:
           sh /tmp/tx.sh --accept --noexec --target /tmp/tx
           mv /tmp/tx/itms ~/itms
 
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+
       - uses: actions/download-artifact@v4
         with:
           name: ipa
@@ -171,10 +175,13 @@ jobs:
           if ~/itms/bin/iTMSTransporter -m upload -assetFile "$PWD/TSMux.ipa" -assetDescription "$PWD/AppStoreInfo.plist" \
                -apiKey "$ASC_KEY_ID" -apiIssuer "$ASC_ISSUER_ID" -v eXtreme > transporter.log 2>&1; then
             tail -40 transporter.log
-          else
-            grep -v -e 'indexing file' -e 'created symlink' transporter.log | tail -300
-            exit 1
+            exit 0
           fi
+          grep -v -e 'indexing file' -e 'created symlink' transporter.log | tail -300
+          # Transporter self-updates at launch and has failed with "parts failed"
+          # after the build had in fact landed; App Store Connect is the truth.
+          pip install --quiet 'pyjwt[crypto]'
+          python3 scripts/asc-build-landed.py TSMux.ipa
 
       - uses: actions/upload-artifact@v4
         if: failure()
