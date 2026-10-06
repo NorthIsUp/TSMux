@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,39 +19,40 @@ const tokenHeader = "Authorization"
 
 func (c *Config) TokenPath() string { return filepath.Join(c.Paths.StateDir, "api-token") }
 
-// EnsureAPIToken returns the install's API token, creating it on first use.
-// It is reused rather than rotated per start: a second `tsmux up` that loses
-// the port race must not lock out the CLI talking to the daemon that won.
-func (c *Config) EnsureAPIToken() (string, error) {
-	path := c.TokenPath()
-	if tok, err := readToken(path); err == nil {
-		// Tighten a file someone loosened by hand; the token is only a secret
-		// while nobody else can read it.
-		return tok, os.Chmod(path, 0o600)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", err
-	}
+// NewAPIToken returns a fresh token for one daemon run. Reusing one across
+// runs would leak it: while no daemon holds the port, anyone can listen there
+// and collect the token that the CLI and the menu bar's status polls send.
+func NewAPIToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	tok := hex.EncodeToString(b)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, fs.ErrExist) {
-		return readToken(path)
+	return hex.EncodeToString(b), nil
+}
+
+// WriteAPIToken publishes tok for the CLI. Call it only once the API listener
+// is bound, so an `up` that loses the port race never replaces the token of
+// the daemon that won. The rename means readers never see a partial file and
+// a pre-existing file's looser mode is not inherited.
+func (c *Config) WriteAPIToken(tok string) error {
+	dir := filepath.Dir(c.TokenPath())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
 	}
+	f, err := os.CreateTemp(dir, ".api-token-*")
 	if err != nil {
-		return "", err
+		return err
 	}
 	_, werr := f.WriteString(tok + "\n")
 	if err := errors.Join(werr, f.Close()); err != nil {
-		os.Remove(path)
-		return "", err
+		os.Remove(f.Name())
+		return err
 	}
-	return tok, nil
+	if err := os.Rename(f.Name(), c.TokenPath()); err != nil {
+		os.Remove(f.Name())
+		return err
+	}
+	return nil
 }
 
 func readToken(path string) (string, error) {

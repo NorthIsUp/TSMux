@@ -279,7 +279,7 @@ func (c *Config) call(method, path string, body []byte, timeout time.Duration) (
 	setToken(req, tok)
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
-		return nil, errDaemonDown
+		return nil, ErrDaemonDown
 	}
 	return resp, nil
 }
@@ -298,7 +298,9 @@ func apiError(resp *http.Response) error {
 	return fmt.Errorf("%s", e.Error)
 }
 
-var errDaemonDown = fmt.Errorf("tsmux daemon is not running (start it with `tsmux up`)")
+// ErrDaemonDown means nothing answered on the API port. Any other client
+// error, a 401 included, means a daemon may well be running.
+var ErrDaemonDown = errors.New("tsmux daemon is not running (start it with `tsmux up`)")
 
 // FetchStatus reads the running daemon's status, or reports that it is down.
 func (c *Config) FetchStatus() ([]Status, error) {
@@ -315,6 +317,25 @@ func (c *Config) FetchStatus() ([]Status, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// RefuseIfRunning errors when a daemon may be holding profile's state dir.
+// Only a daemon that is plainly down counts as safe: a 401 from one the CLI
+// cannot authenticate to is still a live node.
+func (c *Config) RefuseIfRunning(profile string) error {
+	live, err := c.FetchStatus()
+	if errors.Is(err, ErrDaemonDown) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cannot tell whether the daemon is using profile %q: %w", profile, err)
+	}
+	for _, s := range live {
+		if s.Profile == profile {
+			return fmt.Errorf("profile %q is running; stop the daemon first (tsmux up is holding it)", profile)
+		}
+	}
+	return nil
 }
 
 // --- system proxy -----------------------------------------------------------

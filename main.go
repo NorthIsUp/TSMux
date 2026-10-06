@@ -134,7 +134,7 @@ func cmdUp() *cobra.Command {
 			}
 			defer m.Close()
 
-			token, err := cfg.EnsureAPIToken()
+			token, err := tsmux.NewAPIToken()
 			if err != nil {
 				return fmt.Errorf("api token: %w", err)
 			}
@@ -143,6 +143,9 @@ func cmdUp() *cobra.Command {
 				return err
 			}
 			defer closeAll()
+			if err := cfg.WriteAPIToken(token); err != nil {
+				return fmt.Errorf("api token: %w", err)
+			}
 			m.OnStop(stop)
 
 			if applyProxy {
@@ -183,7 +186,7 @@ func cmdDown() *cobra.Command {
 			// Wait for the listener to actually go away: callers stop the
 			// daemon in order to do something that needs it gone.
 			for i := 0; i < 60; i++ {
-				if _, err := cfg.FetchStatus(); err != nil {
+				if _, err := cfg.FetchStatus(); errors.Is(err, tsmux.ErrDaemonDown) {
 					break
 				}
 				time.Sleep(100 * time.Millisecond)
@@ -234,7 +237,7 @@ func cmdStatus() *cobra.Command {
 // contend for the same state directories, so standalone mode is opt-in.
 func fetchStatus(ctx context.Context, cfg *tsmux.Config, standalone bool) ([]tsmux.Status, error) {
 	st, err := cfg.FetchStatus()
-	if err == nil || !standalone {
+	if !errors.Is(err, tsmux.ErrDaemonDown) || !standalone {
 		return st, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -353,12 +356,8 @@ func cmdProfile() *cobra.Command {
 			}
 			// The daemon holds the state dir open; removing it underneath a
 			// live node leaves a node with nowhere to write.
-			if live, err := cfg.FetchStatus(); err == nil {
-				for _, s := range live {
-					if s.Profile == args[0] {
-						return fmt.Errorf("profile %q is running; stop the daemon first (tsmux up is holding it)", args[0])
-					}
-				}
+			if err := cfg.RefuseIfRunning(args[0]); err != nil {
+				return err
 			}
 			dir := cfg.StateDir(args[0])
 			delete(cfg.Profiles, args[0])
@@ -400,11 +399,9 @@ func cmdProfile() *cobra.Command {
 				newName = args[1]
 			}
 			// Same reason as rm: the daemon holds the state dir open.
-			if live, err := cfg.FetchStatus(); err == nil && newName != args[0] {
-				for _, s := range live {
-					if s.Profile == args[0] {
-						return fmt.Errorf("profile %q is running; stop the daemon first (tsmux up is holding it)", args[0])
-					}
+			if newName != args[0] {
+				if err := cfg.RefuseIfRunning(args[0]); err != nil {
+					return err
 				}
 			}
 			if err := cfg.RenameProfile(args[0], newName, renameDisplay); err != nil {
