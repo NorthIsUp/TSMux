@@ -148,7 +148,10 @@ private func waitFor(
         login: "adam@example.com", socksAddr: socks, defaults: d)
     }
     let t = try #require(target())
-    #expect(t.user == "adam" && t.host == "100.64.0.9")
+    #expect(t.users == ["adam", "root"] && t.host == "100.64.0.9")
+    // The account that worked last time goes first.
+    SSHAccess.rememberUser("root", for: t, defaults: d)
+    #expect(try #require(target()).users == ["root", "adam"])
     #expect(target(online: false) == nil)
     #expect(target(keys: []) == nil)
     #expect(target(keys: nil) == nil)

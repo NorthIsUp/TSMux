@@ -8,6 +8,8 @@ public struct SSHRequest: Codable, Sendable, Equatable {
   public var host: String
   public var port: Int?
   public var user: String
+  /// Tried in order after `user` when the server turns one away.
+  public var users: [String]
   public var hostKeys: [String]
   public var trustedKey: String?
   public var password: String?
@@ -16,7 +18,8 @@ public struct SSHRequest: Codable, Sendable, Equatable {
   public var rows: Int
 
   public init(
-    socksAddr: String, host: String, port: Int? = nil, user: String, hostKeys: [String] = [],
+    socksAddr: String, host: String, port: Int? = nil, user: String, users: [String] = [],
+    hostKeys: [String] = [],
     trustedKey: String? = nil, password: String? = nil, privateKey: String? = nil,
     cols: Int = 80, rows: Int = 24
   ) {
@@ -24,6 +27,7 @@ public struct SSHRequest: Codable, Sendable, Equatable {
     self.host = host
     self.port = port
     self.user = user
+    self.users = users
     self.hostKeys = hostKeys
     self.trustedKey = trustedKey
     self.password = password
@@ -34,7 +38,7 @@ public struct SSHRequest: Codable, Sendable, Equatable {
 
   enum CodingKeys: String, CodingKey {
     case socksAddr = "socks_addr"
-    case host, port, user
+    case host, port, user, users
     case hostKeys = "host_keys"
     case trustedKey = "trusted_key"
     case password
@@ -50,6 +54,8 @@ public struct SSHState: Decodable, Sendable, Equatable {
   }
 
   public var phase: Phase
+  /// Who the server let in, once open.
+  public var user: String?
   public var error: String?
   public var errorKind: String?
   public var hostKey: String?
@@ -68,7 +74,7 @@ public struct SSHState: Decodable, Sendable, Equatable {
   public var isDenied: Bool { errorKind == "denied" }
 
   enum CodingKeys: String, CodingKey {
-    case phase, error
+    case phase, user, error
     case errorKind = "error_kind"
     case hostKey = "host_key"
     case fingerprint, urls

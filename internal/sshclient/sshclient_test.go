@@ -58,7 +58,11 @@ func startServerFor(t *testing.T, banner, allowedUser string) *testServer {
 		cfg.PreAuthConnCallback = func(c ssh.ServerPreAuthConn) { spac = c }
 		cfg.NoClientAuthCallback = func(cm ssh.ConnMetadata) (*ssh.Permissions, error) {
 			if cm.User() != allowedUser {
-				spac.SendAuthBanner("tailscale: tailnet policy does not permit you to SSH as user \"" + cm.User() + "\"\n")
+				msg := "tailnet policy does not permit you to SSH as user"
+				if cm.User() == "nobody" {
+					msg = "failed to look up local user" // the other way tailssh refuses
+				}
+				spac.SendAuthBanner("tailscale: " + msg + " \"" + cm.User() + "\"\n")
 				return nil, &ssh.PartialSuccessError{}
 			}
 			return nil, nil
@@ -288,6 +292,20 @@ func TestPolicyDenial(t *testing.T) {
 		t.Fatalf("allowed user: %v", err)
 	}
 	s.Close()
+
+	// The login's local part isn't an account there; the next candidate is.
+	cfg.User, cfg.Users = "", []string{"nobody", "adam"}
+	s, err = Dial(context.Background(), cfg)
+	if err != nil || s.User != "adam" {
+		t.Fatalf("fallback: user %v, err %v", s, err)
+	}
+	s.Close()
+
+	cfg.Users = []string{"nobody", "root"}
+	_, err = Dial(context.Background(), cfg)
+	if !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), `"nobody"`) || !strings.Contains(err.Error(), `"root"`) {
+		t.Fatalf("all refused: want ErrDenied naming both, got %v", err)
+	}
 }
 
 func TestCloseUnblocksRead(t *testing.T) {

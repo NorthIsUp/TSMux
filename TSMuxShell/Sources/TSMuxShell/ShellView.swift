@@ -29,6 +29,9 @@ public struct ShellView: View {
       .onChange(of: connection.state.isDenied) { _, denied in
         if denied { SSHAccess.markDenied(target) }
       }
+      .onChange(of: connection.state.user) { _, user in
+        if let user { SSHAccess.rememberUser(user, for: target) }
+      }
   }
 
   @ViewBuilder private var banner: some View {
@@ -66,7 +69,9 @@ public struct ShellView: View {
         + "Not connecting: the host was reinstalled, or something is impersonating it."
     }
     if s.isDenied {
-      return "Tailscale SSH doesn't let \(target.user) into this machine."
+      // The server's own reasons, one per account tried.
+      return "Tailscale SSH didn't let \(target.users.joined(separator: " or ")) in.\n"
+        + (s.error ?? "")
     }
     if s.phase == .closed { return "Disconnected." }
     return s.error ?? "Couldn't connect."

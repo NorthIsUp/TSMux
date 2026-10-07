@@ -30,6 +30,7 @@ type openRequest struct {
 	Host       string   `json:"host"`
 	Port       int      `json:"port,omitempty"`
 	User       string   `json:"user"`
+	Users      []string `json:"users,omitempty"`
 	HostKeys   []string `json:"host_keys,omitempty"`
 	TrustedKey string   `json:"trusted_key,omitempty"`
 	Password   string   `json:"password,omitempty"`
@@ -41,7 +42,8 @@ type openRequest struct {
 // state is what TSMuxSSHState returns. ErrorKind lets the UI tell "ask the
 // user to trust this key" and "this key changed" apart from plain failure.
 type state struct {
-	Phase       string   `json:"phase"` // connecting, open, failed, closed
+	Phase       string   `json:"phase"`          // connecting, open, failed, closed
+	User        string   `json:"user,omitempty"` // who was let in, once open
 	Error       string   `json:"error,omitempty"`
 	ErrorKind   string   `json:"error_kind,omitempty"` // unknown_host_key, host_key_mismatch, denied
 	HostKey     string   `json:"host_key,omitempty"`
@@ -89,7 +91,7 @@ func TSMuxSSHOpen(creq *C.char) C.longlong {
 
 	go func() {
 		sess, err := sshclient.Dial(ctx, sshclient.Config{
-			SOCKSAddr: req.SOCKSAddr, Host: req.Host, Port: req.Port, User: req.User,
+			SOCKSAddr: req.SOCKSAddr, Host: req.Host, Port: req.Port, User: req.User, Users: req.Users,
 			HostKeys: req.HostKeys, TrustedKey: req.TrustedKey,
 			Password: req.Password, PrivateKey: []byte(req.PrivateKey),
 			Cols: req.Cols, Rows: req.Rows,
@@ -122,7 +124,7 @@ func TSMuxSSHOpen(creq *C.char) C.longlong {
 			c.st.Phase = "closed"
 			return
 		}
-		c.sess, c.st.Phase = sess, "open"
+		c.sess, c.st.Phase, c.st.User = sess, "open", sess.User
 		go func() {
 			sess.Wait()
 			c.mu.Lock()
