@@ -526,6 +526,11 @@ final class Controller: NSObject, NSMenuDelegate {
     sub.addItem(action("Edit config.yaml…", #selector(openConfig), symbol: "doc.text"))
     sub.addItem(action("Run Diagnostics…", #selector(runDoctor), symbol: "stethoscope"))
     sub.addItem(.separator())
+    sub.addItem(
+      action(
+        "TSMux on GitHub…", #selector(openRepo), symbol: "chevron.left.forwardslash.chevron.right"))
+    sub.addItem(
+      action("Report an Issue…", #selector(reportIssue), symbol: "exclamationmark.bubble"))
     let update = action(
       "Check for Updates…", #selector(checkForUpdates), symbol: "arrow.down.circle")
     // Sparkle disables its own check while one is in flight; without
@@ -880,6 +885,9 @@ final class Controller: NSObject, NSMenuDelegate {
     NSApp.activate()
     updater.checkForUpdates(nil)
   }
+
+  @objc private func openRepo() { NSWorkspace.shared.open(Project.repo) }
+  @objc private func reportIssue() { NSWorkspace.shared.open(Project.issues) }
 
   @objc private func openSettings() {
     SettingsScene.open()

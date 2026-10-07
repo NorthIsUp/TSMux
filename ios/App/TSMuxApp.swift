@@ -61,6 +61,20 @@ struct ContentView: View {
             Button("Set up your first tailnet…", systemImage: "plus.circle") { adding = true }
           }
         }
+
+        Section {
+          Link(destination: Project.repo) {
+            Label("Source code on GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+          }
+          Link(destination: Project.issues) {
+            Label("Report an issue", systemImage: "exclamationmark.bubble")
+          }
+          Link(destination: Project.privacy) { Label("Privacy", systemImage: "hand.raised") }
+        } header: {
+          Text("About")
+        } footer: {
+          Text("TSMux \(Project.version) · MIT licensed")
+        }
       }
       .navigationTitle("TSMux")
       .navigationDestination(for: String.self) { TailnetView(profile: $0) }

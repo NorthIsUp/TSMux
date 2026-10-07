@@ -199,14 +199,20 @@ jobs:
           pip install --quiet 'pyjwt[crypto]'
           python3 scripts/asc-build-landed.py TSMux.ipa
 
-      - name: Submit to the public beta
-        if: steps.bump.outputs.public == 'true'
+      - name: Attach the build to the App Store version
         env:
           ASC_KEY_ID: 238ATU74S4
           ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
         run: |
           pip install --quiet 'pyjwt[crypto]'
-          python3 scripts/testflight-public.py ship TSMux.ipa
+          python3 scripts/testflight.py attach TSMux.ipa
+
+      - name: Submit to the public beta
+        if: steps.bump.outputs.public == 'true'
+        env:
+          ASC_KEY_ID: 238ATU74S4
+          ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
+        run: python3 scripts/testflight.py ship TSMux.ipa
 
       - uses: actions/upload-artifact@v4
         if: failure()
