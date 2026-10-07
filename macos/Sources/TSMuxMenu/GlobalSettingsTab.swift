@@ -44,6 +44,12 @@ struct GlobalSettingsTab: View {
           Button("Show me how") { showCLI = true }
         }
       }
+      Section("About") {
+        LabeledContent("Version", value: Project.version)
+        LabeledContent("Source") { Link("github.com/NorthIsUp/TSMux", destination: Project.repo) }
+        LabeledContent("Feedback") { Link("Report an issue", destination: Project.issues) }
+        LabeledContent("Changes") { Link("Release notes", destination: Project.releaseNotes) }
+      }
     }
     .formStyle(.grouped)
     .sheet(isPresented: $showCLI) { CLIIntegrationSheet() }

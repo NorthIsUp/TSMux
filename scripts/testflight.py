@@ -1,8 +1,11 @@
-"""Run the public TestFlight beta for TSMux.
+"""Post-upload App Store Connect steps for TSMux builds.
 
   setup        test info, review contact (copied from another of the team's
                apps so the phone number stays out of this repo) and the
                "public" group with its public link; safe to rerun
+  attach IPA   wait for the .ipa's build to process and attach it to the iOS
+               App Store version, which is where App Store Connect's app
+               grid takes its icon from; nothing is submitted
   ship IPA     wait for the .ipa's build to process, add it to "public" and
                submit it for Beta App Review
 
@@ -109,7 +112,7 @@ def bundle_version(ipa: str) -> str:
         return plistlib.loads(z.read(name))["CFBundleVersion"]
 
 
-def ship(ipa: str) -> None:
+def processed(ipa: str) -> str:
     version = bundle_version(ipa)
     deadline = time.monotonic() + PROCESS_SECONDS
     while True:
@@ -120,7 +123,24 @@ def ship(ipa: str) -> None:
         if state in ("FAILED", "INVALID") or time.monotonic() > deadline:
             sys.exit(f"build {version} is {state}")
         time.sleep(30)
-    build = builds[0]["id"]
+    return builds[0]["id"]
+
+
+def attach(ipa: str) -> None:
+    versions = call("GET", f"/apps/{APP_ID}/appStoreVersions?filter[platform]=IOS"
+                    "&filter[appStoreState]=PREPARE_FOR_SUBMISSION")["data"]
+    if not versions:
+        print("no iOS version in Prepare for Submission; nothing to attach to")
+        return
+    build = processed(ipa)
+    call("PATCH", f"/appStoreVersions/{versions[0]['id']}/relationships/build",
+         {"data": {"type": "builds", "id": build}})
+    print(f"build {bundle_version(ipa)} is attached to iOS {versions[0]['attributes']['versionString']}")
+
+
+def ship(ipa: str) -> None:
+    version = bundle_version(ipa)
+    build = processed(ipa)
 
     locs = call("GET", f"/builds/{build}/betaBuildLocalizations")["data"]
     if not locs:
@@ -144,6 +164,8 @@ if __name__ == "__main__":
     match sys.argv[1:]:
         case ["setup"]:
             setup()
+        case ["attach", ipa]:
+            attach(ipa)
         case ["ship", ipa]:
             ship(ipa)
         case _:
