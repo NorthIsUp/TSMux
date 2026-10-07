@@ -8,7 +8,7 @@ settings:
     DEVELOPMENT_TEAM: 4BJBDQVY6M
     CODE_SIGN_STYLE: Automatic
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: 0.1.0
+    MARKETING_VERSION: 0.1.2 # ios-testflight.sh sets it from VERSION
     CURRENT_PROJECT_VERSION: "1"
 packages:
   TSMuxKit:

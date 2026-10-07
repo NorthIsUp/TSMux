@@ -28,6 +28,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 # A UTC timestamp build number never collides with an earlier upload, from any machine.
 xcodebuild -project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release \
   -destination generic/platform=iOS -archivePath "$OUT/$SCHEME.xcarchive" \
+  MARKETING_VERSION="$(tr -d '[:space:]' < ../VERSION)" \
   CURRENT_PROJECT_VERSION="$(date -u +%Y%m%d%H%M)" archive -quiet
 
 # Linux Transporter can't analyze an .ipa itself and needs AppStoreInfo.plist beside it.
