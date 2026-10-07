@@ -28,6 +28,10 @@ type Config struct {
 	Host      string
 	Port      int
 	User      string
+	// Users are tried in order when the server turns one away, for when the
+	// local account a tailnet login maps to isn't known up front. User, if
+	// set, goes first.
+	Users []string
 
 	// HostKeys are the keys control advertises for the host (authorized_keys
 	// form). When set, they are the only keys accepted.
@@ -74,6 +78,8 @@ var ErrDenied = errors.New("the server does not let this user in")
 // Session is one interactive shell. Read returns the terminal's output
 // (stdout and stderr together, as a terminal shows them); Write is its input.
 type Session struct {
+	User string // the account that was let in
+
 	client *ssh.Client
 	sess   *ssh.Session
 	stdin  io.WriteCloser
@@ -87,10 +93,31 @@ type Session struct {
 
 const dialTimeout = 20 * time.Second
 
-// Dial connects, authenticates and starts a login shell on a PTY.
-// Authentication can block for as long as a check-mode login takes; cancel
-// ctx to give up.
+// Dial connects, authenticates and starts a login shell on a PTY, trying each
+// candidate user until one is let in. Authentication can block for as long as
+// a check-mode login takes; cancel ctx to give up.
 func Dial(ctx context.Context, cfg Config) (*Session, error) {
+	users := cfg.Users
+	if cfg.User != "" {
+		users = append([]string{cfg.User}, users...)
+	}
+	if len(users) == 0 {
+		return nil, errors.New("no user to log in as")
+	}
+	var denials []string
+	for _, u := range users {
+		one := cfg
+		one.User = u
+		s, err := dialAs(ctx, one)
+		if !errors.Is(err, ErrDenied) {
+			return s, err
+		}
+		denials = append(denials, err.Error())
+	}
+	return nil, fmt.Errorf("%w: %s", ErrDenied, strings.Join(denials, "; "))
+}
+
+func dialAs(ctx context.Context, cfg Config) (*Session, error) {
 	if cfg.Port == 0 {
 		cfg.Port = 22
 	}
@@ -148,6 +175,7 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 		client.Close()
 		return nil, err
 	}
+	s.User = cfg.User
 	return s, nil
 }
 
@@ -299,11 +327,12 @@ func (s *Session) Wait() error {
 	return s.exitErr
 }
 
-// denial finds Tailscale SSH's refusal. tailssh says no by sending an auth
-// banner and hanging up, so the handshake error itself is only an EOF.
+// denial finds Tailscale SSH's refusal. tailssh says no — policy, or no such
+// local user — by sending a "tailscale: " auth banner and hanging up, so the
+// handshake error itself is only an EOF.
 func denial(banners []string) string {
 	for _, b := range banners {
-		if strings.Contains(b, "tailnet policy does not permit") {
+		if strings.HasPrefix(b, "tailscale: ") {
 			return strings.TrimSpace(strings.TrimPrefix(b, "tailscale: "))
 		}
 	}
