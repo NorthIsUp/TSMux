@@ -117,6 +117,9 @@ jobs:
       - name: Archive and export iOS
         id: export
         if: env.HAS_IOS_SIGNING == 'true'
+        # Internal-only builds can never reach the public beta.
+        env:
+          INTERNAL_ONLY: '0'
         run: scripts/ios-testflight.sh --no-upload
 
       - uses: actions/upload-artifact@v4
@@ -130,8 +133,9 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-  # Every main push lands in internal TestFlight. The upload is mostly waiting
-  # on Apple, so it runs on Linux, where minutes cost a tenth.
+  # Every main push lands in internal TestFlight, then goes to Beta App Review
+  # for the public link. Both mostly wait on Apple, so they run on Linux, where
+  # minutes cost a tenth.
   testflight:
     needs: [test, sign]
     if: needs.sign.outputs.exported == 'true' && github.event_name != 'pull_request'
@@ -184,6 +188,14 @@ jobs:
           # after the build had in fact landed; App Store Connect is the truth.
           pip install --quiet 'pyjwt[crypto]'
           python3 scripts/asc-build-landed.py TSMux.ipa
+
+      - name: Submit to the public beta
+        env:
+          ASC_KEY_ID: 238ATU74S4
+          ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
+        run: |
+          pip install --quiet 'pyjwt[crypto]'
+          python3 scripts/testflight-public.py ship TSMux.ipa
 
       - uses: actions/upload-artifact@v4
         if: failure()
