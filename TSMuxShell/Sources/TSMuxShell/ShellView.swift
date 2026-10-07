@@ -1,26 +1,19 @@
 import SwiftTerm
 import SwiftUI
 
-/// An SSH shell: the terminal, plus what the connection needs from the user
-/// along the way — a check-mode sign-in, trusting an unknown host key, or
-/// reconnecting after the session drops.
+/// An SSH shell to a Tailscale SSH machine: the terminal, plus what the
+/// connection needs along the way — a check-mode sign-in, or reconnecting
+/// after the session drops.
 public struct ShellView: View {
   @State private var connection: SSHConnection
   @State private var terminal = TerminalBox()
-  @State private var confirmTrust = false
   @Environment(\.openURL) private var openURL
   @Environment(\.scenePhase) private var scenePhase
-  private let tailnet: String
+  private let target: ShellTarget
 
-  /// `tailnet` scopes keys the user trusts, so one host name in two tailnets
-  /// never shares a key.
-  public init(request: SSHRequest, tailnet: String) {
-    var request = request
-    if request.hostKeys.isEmpty {
-      request.trustedKey = TrustedHostKeys.key(tailnet: tailnet, host: request.host)
-    }
-    _connection = State(initialValue: SSHConnection(request))
-    self.tailnet = tailnet
+  public init(target: ShellTarget) {
+    self.target = target
+    _connection = State(initialValue: SSHConnection(target.request))
   }
 
   public var body: some View {
@@ -32,23 +25,9 @@ public struct ShellView: View {
       .onChange(of: scenePhase) { _, phase in
         if phase == .active, connection.state.phase == .closed { connect() }
       }
-      .onChange(of: connection.state.isUnknownHostKey) { _, unknown in
-        if unknown { confirmTrust = true }
-      }
-      .confirmationDialog(
-        "Trust this host?", isPresented: $confirmTrust, titleVisibility: .visible
-      ) {
-        Button("Trust and Connect") {
-          guard let key = connection.state.hostKey else { return }
-          TrustedHostKeys.trust(key, tailnet: tailnet, host: connection.request.host)
-          connection.trust(key, output: feed)
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text(
-          "\(connection.request.host) doesn't advertise a host key through the tailnet. "
-            + "Its key fingerprint is \(connection.state.fingerprint ?? "unknown")."
-        )
+      // The device list stops offering a shell here for a while.
+      .onChange(of: connection.state.isDenied) { _, denied in
+        if denied { SSHAccess.markDenied(target) }
       }
   }
 
@@ -66,12 +45,10 @@ public struct ShellView: View {
       .padding(12)
       .background(.regularMaterial, in: .capsule)
       .padding()
-    case .failed where state.isUnknownHostKey:
-      EmptyView()
     case .failed, .closed:
       VStack(spacing: 8) {
         Text(message(state)).font(.callout).multilineTextAlignment(.center)
-        if !state.isHostKeyMismatch {
+        if !state.isHostKeyMismatch && !state.isDenied {
           Button("Reconnect") { connect() }.buttonStyle(.borderedProminent)
         }
       }
@@ -85,8 +62,11 @@ public struct ShellView: View {
 
   private func message(_ s: SSHState) -> String {
     if s.isHostKeyMismatch {
-      return "\(connection.request.host)'s host key changed (\(s.fingerprint ?? "unknown")). "
+      return "\(target.host)'s host key changed (\(s.fingerprint ?? "unknown")). "
         + "Not connecting: the host was reinstalled, or something is impersonating it."
+    }
+    if s.isDenied {
+      return "Tailscale SSH doesn't let \(target.user) into this machine."
     }
     if s.phase == .closed { return "Disconnected." }
     return s.error ?? "Couldn't connect."

@@ -67,6 +67,10 @@ func (e *HostKeyMismatchError) Error() string {
 	return "host key " + e.Fingerprint + " does not match the key this host is known by"
 }
 
+// ErrDenied means the server turned the user away: for a Tailscale SSH host,
+// its policy has no rule letting this tailnet identity in as that user.
+var ErrDenied = errors.New("the server does not let this user in")
+
 // Session is one interactive shell. Read returns the terminal's output
 // (stdout and stderr together, as a terminal shows them); Write is its input.
 type Session struct {
@@ -104,6 +108,7 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 
+	var banners []string
 	hostKeyCB, err := hostKeyCallback(cfg)
 	if err != nil {
 		conn.Close()
@@ -114,6 +119,7 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 		Auth:            authMethods(cfg),
 		HostKeyCallback: hostKeyCB,
 		BannerCallback: func(msg string) error {
+			banners = append(banners, msg)
 			if cfg.Banner != nil {
 				cfg.Banner(msg)
 			}
@@ -125,6 +131,13 @@ func Dial(ctx context.Context, cfg Config) (*Session, error) {
 		conn.Close()
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if reason := denial(banners); reason != "" {
+			return nil, fmt.Errorf("%w: %s", ErrDenied, reason)
+		}
+		// x/crypto/ssh has no typed error for this; its message is stable.
+		if strings.Contains(err.Error(), "unable to authenticate") {
+			return nil, fmt.Errorf("%w: %v", ErrDenied, err)
 		}
 		return nil, unwrapHostKeyError(err)
 	}
@@ -284,6 +297,17 @@ func (s *Session) Close() error {
 func (s *Session) Wait() error {
 	<-s.done
 	return s.exitErr
+}
+
+// denial finds Tailscale SSH's refusal. tailssh says no by sending an auth
+// banner and hanging up, so the handshake error itself is only an EOF.
+func denial(banners []string) string {
+	for _, b := range banners {
+		if strings.Contains(b, "tailnet policy does not permit") {
+			return strings.TrimSpace(strings.TrimPrefix(b, "tailscale: "))
+		}
+	}
+	return ""
 }
 
 // URLs pulls http(s) links out of a banner, for a tappable check-mode login.

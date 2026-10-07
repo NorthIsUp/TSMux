@@ -64,6 +64,8 @@ public struct SSHState: Decodable, Sendable, Equatable {
   public var isUnknownHostKey: Bool { errorKind == "unknown_host_key" }
   /// The host presented a different key than it is known by.
   public var isHostKeyMismatch: Bool { errorKind == "host_key_mismatch" }
+  /// The tailnet's SSH policy doesn't let this user in.
+  public var isDenied: Bool { errorKind == "denied" }
 
   enum CodingKeys: String, CodingKey {
     case phase, error
@@ -123,12 +125,6 @@ public final class SSHConnection {
         try? await Task.sleep(for: .milliseconds(fresh.phase == .open ? 1000 : 250))
       }
     }
-  }
-
-  /// Retries with a host key the user chose to trust.
-  public func trust(_ key: String, output: @escaping @MainActor ([UInt8]) -> Void) {
-    request.trustedKey = key
-    start(output: output)
   }
 
   public func send(_ bytes: [UInt8]) {

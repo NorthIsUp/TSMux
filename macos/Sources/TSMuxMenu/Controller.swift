@@ -559,7 +559,12 @@ final class Controller: NSObject, NSMenuDelegate {
       for d in group.devices { addDeviceVariants(d, to: menu, profile: p) }
     }
     menu.addItem(.separator())
-    menu.addItem(disabled("⌥ copy IP   ⇧⌥ copy name   ⌘ open shell"))
+    let anyShell = devices.contains { d in
+      SSHAccess.target(
+        device: d.name, ips: d.ips, online: d.online, hostKeys: d.sshHostKeys, tailnet: p.profile,
+        login: p.user?.loginName, socksAddr: p.socks5Proxy) != nil
+    }
+    menu.addItem(disabled("⌥ copy IP   ⇧⌥ copy name" + (anyShell ? "   ⌘ open shell" : "")))
     root.submenu = menu
     sub.addItem(root)
   }
@@ -577,6 +582,10 @@ final class Controller: NSObject, NSMenuDelegate {
       (d.shortName, d.shortName),
     ]
     let masks: [NSEvent.ModifierFlags] = [[], [.option], [.option, .shift]]
+    // Only Tailscale SSH machines get a shell; see SSHAccess.
+    let target = SSHAccess.target(
+      device: d.name, ips: d.ips, online: d.online, hostKeys: d.sshHostKeys,
+      tailnet: profile.profile, login: profile.user?.loginName, socksAddr: profile.socks5Proxy)
     for (i, v) in variants.enumerated() {
       let mi = NSMenuItem(title: name, action: #selector(copyValue(_:)), keyEquivalent: "")
       mi.target = self
@@ -587,29 +596,45 @@ final class Controller: NSObject, NSMenuDelegate {
       if let hint = v.0 {
         mi.attributedTitle = Self.rowWithHint(name, hint)
       }
+      if target != nil { mi.attributedTitle = Self.withShellGlyph(mi.attributedTitle, name) }
       mi.toolTip = [d.name, d.primaryIP, d.os].compactMap { $0 }.joined(separator: " · ")
       mi.setAccessibilityLabel(
         "\(d.shortName), \(d.online ? "online" : "offline"), copies \(v.1 ?? "nothing")")
       menu.addItem(mi)
     }
+    guard let target else { return }
     let shell = NSMenuItem(title: name, action: #selector(openShell(_:)), keyEquivalent: "")
     shell.target = self
     shell.keyEquivalentModifierMask = [.command]
     shell.isAlternate = true
-    shell.attributedTitle = Self.rowWithHint(name, "ssh")
-    shell.isEnabled = profile.socks5Proxy != nil
-    shell.representedObject = profile.socks5Proxy.map {
-      ShellLauncher.Target(
-        device: d.name, host: d.primaryIP ?? d.name, socksAddr: $0,
-        hostKeys: d.sshHostKeys ?? [], tailnet: profile.profile)
-    }
-    shell.setAccessibilityLabel("\(d.shortName), open an SSH shell")
+    shell.attributedTitle = Self.withShellGlyph(
+      Self.rowWithHint(name, "ssh \(target.user)"), name)
+    shell.representedObject = target
+    shell.setAccessibilityLabel("\(d.shortName), open an SSH shell as \(target.user)")
     menu.addItem(shell)
   }
 
   @objc private func openShell(_ sender: NSMenuItem) {
-    guard let target = sender.representedObject as? ShellLauncher.Target else { return }
+    guard let target = sender.representedObject as? ShellTarget else { return }
     ShellWindows.open(target)
+  }
+
+  /// Marks a row whose machine takes an SSH shell: a terminal glyph right
+  /// after the name, before any hint column.
+  private static func withShellGlyph(_ title: NSAttributedString?, _ name: String)
+    -> NSAttributedString
+  {
+    let font = NSFont.menuFont(ofSize: 0)
+    let out = NSMutableAttributedString(
+      attributedString: title ?? NSAttributedString(string: name, attributes: [.font: font]))
+    let glyph = NSTextAttachment()
+    glyph.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "SSH available")?
+      .withSymbolConfiguration(.init(pointSize: font.pointSize - 2, weight: .regular))
+    let mark = NSMutableAttributedString(string: "  ")
+    mark.append(NSAttributedString(attachment: glyph))
+    let end = (out.string as NSString).range(of: name).upperBound
+    out.insert(mark, at: end == NSNotFound ? out.length : end)
+    return out
   }
 
   /// A menu row with a secondary value pinned to the right. The tab stop is

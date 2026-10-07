@@ -39,11 +39,30 @@ func newHostSigner(t *testing.T) ssh.Signer {
 }
 
 func startServer(t *testing.T, banner string) *testServer {
+	return startServerFor(t, banner, "")
+}
+
+// startServerFor lets only allowedUser in when it is set, the way a Tailscale
+// SSH policy maps a tailnet identity to some local users and not others.
+func startServerFor(t *testing.T, banner, allowedUser string) *testServer {
 	t.Helper()
 	signer := newHostSigner(t)
 	cfg := &ssh.ServerConfig{
 		NoClientAuth:   true,
 		BannerCallback: func(ssh.ConnMetadata) string { return banner },
+	}
+	if allowedUser != "" {
+		// The way tailssh refuses: a banner naming the reason, then an empty
+		// PartialSuccessError, which makes the server hang up.
+		var spac ssh.ServerPreAuthConn
+		cfg.PreAuthConnCallback = func(c ssh.ServerPreAuthConn) { spac = c }
+		cfg.NoClientAuthCallback = func(cm ssh.ConnMetadata) (*ssh.Permissions, error) {
+			if cm.User() != allowedUser {
+				spac.SendAuthBanner("tailscale: tailnet policy does not permit you to SSH as user \"" + cm.User() + "\"\n")
+				return nil, &ssh.PartialSuccessError{}
+			}
+			return nil, nil
+		}
 	}
 	cfg.AddHostKey(signer)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -251,6 +270,24 @@ func TestHostKeyPolicy(t *testing.T) {
 	if err := dial(Config{TrustedKey: other}); !errors.As(err, &mismatch) {
 		t.Errorf("remembered key changed: want HostKeyMismatchError, got %v", err)
 	}
+}
+
+func TestPolicyDenial(t *testing.T) {
+	ts := startServerFor(t, "", "adam")
+	host, port := ts.host(t)
+	cfg := Config{Host: host, Port: port, HostKeys: []string{authorized(ts.hostKey)}}
+
+	cfg.User = "root"
+	_, err := Dial(context.Background(), cfg)
+	if !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), `as user "root"`) {
+		t.Fatalf("denied user: want ErrDenied naming the user, got %v", err)
+	}
+	cfg.User = "adam"
+	s, err := Dial(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("allowed user: %v", err)
+	}
+	s.Close()
 }
 
 func TestCloseUnblocksRead(t *testing.T) {

@@ -1,21 +1,25 @@
 import SwiftUI
 import TSMuxKit
+import TSMuxShell
 import UIKit
 
 struct DevicesView: View {
   let profile: String
   @Environment(TunnelModel.self) private var model
   @State private var query = ""
-  @State private var shell: Device?
+  @State private var shell: ShellTarget?
 
   var body: some View {
     List {
       ForEach(deviceGroups(filtered)) { g in
         Section(g.name) {
           ForEach(g.devices) { d in
-            DeviceRow(device: d) { shell = d }
+            let target = shellTarget(d)
+            DeviceRow(device: d, openShell: target.map { t in { shell = t } })
               .swipeActions {
-                Button("Shell", systemImage: "terminal") { shell = d }.tint(.indigo)
+                if let target {
+                  Button("Shell", systemImage: "terminal") { shell = target }.tint(.indigo)
+                }
               }
           }
         }
@@ -23,9 +27,15 @@ struct DevicesView: View {
     }
     .navigationTitle("Devices")
     .searchable(text: $query)
-    .navigationDestination(item: $shell) { d in
-      if let t = model.tailnet(profile) { ShellScreen(device: d, tailnet: t) }
-    }
+    .navigationDestination(item: $shell) { ShellScreen(target: $0) }
+  }
+
+  /// Only Tailscale SSH machines get a shell; see SSHAccess.
+  private func shellTarget(_ d: Device) -> ShellTarget? {
+    let t = model.tailnet(profile)
+    return SSHAccess.target(
+      device: d.name, ips: d.ips, online: d.online, hostKeys: d.sshHostKeys, tailnet: profile,
+      login: t?.user?.loginName, socksAddr: t?.socks5Proxy)
   }
 
   private var filtered: [Device] {
@@ -39,7 +49,7 @@ struct DevicesView: View {
 /// IP and the short name, like ⌥ and ⌥⇧ in the macOS menu.
 private struct DeviceRow: View {
   let device: Device
-  let openShell: () -> Void
+  let openShell: (() -> Void)?
   @State private var copied = false
 
   var body: some View {
@@ -49,7 +59,15 @@ private struct DeviceRow: View {
       HStack {
         Circle().fill(device.online ? .green : .gray.opacity(0.4)).frame(width: 8, height: 8)
         VStack(alignment: .leading) {
-          Text(device.shortName).foregroundStyle(.primary)
+          HStack(spacing: 6) {
+            Text(device.shortName).foregroundStyle(.primary)
+            if openShell != nil {
+              Image(systemName: "terminal")
+                .font(.caption)
+                .foregroundStyle(.indigo)
+                .accessibilityLabel("SSH available")
+            }
+          }
           if let os = device.os, !os.isEmpty {
             Text(os).font(.caption).foregroundStyle(.secondary)
           }
@@ -66,7 +84,9 @@ private struct DeviceRow: View {
         Button("Copy IP", systemImage: "number") { copy(ip) }
       }
       Button("Copy name", systemImage: "textformat") { copy(device.shortName) }
-      Button("Open Shell", systemImage: "terminal", action: openShell)
+      if let openShell {
+        Button("Open Shell", systemImage: "terminal", action: openShell)
+      }
       if let url = URL(string: device.url) {
         Link(destination: url) { Label("Open in Safari", systemImage: "safari") }
       }
