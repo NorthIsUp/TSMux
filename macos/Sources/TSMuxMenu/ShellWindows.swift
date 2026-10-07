@@ -8,13 +8,13 @@ import TSMuxShell
 enum ShellWindows {
   private static var open: [NSWindow] = []
 
-  static func open(_ target: ShellLauncher.Target) {
+  static func open(_ target: ShellTarget) {
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 760, height: 480),
       styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered, defer: false)
     window.title = target.device.split(separator: ".").first.map(String.init) ?? target.device
-    window.contentViewController = NSHostingController(rootView: ShellLauncher(target: target))
+    window.contentViewController = NSHostingController(rootView: ShellView(target: target))
     window.isReleasedWhenClosed = false
     window.center()
     var token: (any NSObjectProtocol)?

@@ -43,7 +43,7 @@ type openRequest struct {
 type state struct {
 	Phase       string   `json:"phase"` // connecting, open, failed, closed
 	Error       string   `json:"error,omitempty"`
-	ErrorKind   string   `json:"error_kind,omitempty"` // unknown_host_key, host_key_mismatch
+	ErrorKind   string   `json:"error_kind,omitempty"` // unknown_host_key, host_key_mismatch, denied
 	HostKey     string   `json:"host_key,omitempty"`
 	Fingerprint string   `json:"fingerprint,omitempty"`
 	Banners     []string `json:"banners,omitempty"`
@@ -112,6 +112,8 @@ func TSMuxSSHOpen(creq *C.char) C.longlong {
 				c.st.ErrorKind, c.st.HostKey, c.st.Fingerprint = "unknown_host_key", unknown.Key, unknown.Fingerprint
 			case errors.As(err, &mismatch):
 				c.st.ErrorKind, c.st.Fingerprint = "host_key_mismatch", mismatch.Fingerprint
+			case errors.Is(err, sshclient.ErrDenied):
+				c.st.ErrorKind = "denied"
 			}
 			return
 		}

@@ -124,22 +124,53 @@ private func waitFor(
   }
 }
 
-@Suite struct TrustedHostKeysTests {
-  @Test func scopedByTailnet() throws {
-    let d = try #require(UserDefaults(suiteName: "tsmuxshell-test-\(UUID().uuidString)"))
-    TrustedHostKeys.trust("ssh-ed25519 AAAA", tailnet: "work", host: "box", defaults: d)
-    #expect(TrustedHostKeys.key(tailnet: "work", host: "box", defaults: d) == "ssh-ed25519 AAAA")
-    #expect(TrustedHostKeys.key(tailnet: "home", host: "box", defaults: d) == nil)
-    TrustedHostKeys.forget(tailnet: "work", host: "box", defaults: d)
-    #expect(TrustedHostKeys.key(tailnet: "work", host: "box", defaults: d) == nil)
+@Suite struct SSHAccessTests {
+  private func defaults() throws -> UserDefaults {
+    try #require(UserDefaults(suiteName: "tsmuxshell-test-\(UUID().uuidString)"))
   }
 
-  @Test func requestEncodesShellcoreKeys() throws {
-    let r = SSHRequest(
-      socksAddr: "127.0.0.1:1080", host: "h", user: "u", hostKeys: ["k"], cols: 90, rows: 20)
-    let json = try #require(String(data: JSONEncoder().encode(r), encoding: .utf8))
-    for key in ["\"socks_addr\"", "\"host_keys\"", "\"cols\":90", "\"rows\":20"] {
-      #expect(json.contains(key), "\(key) missing from \(json)")
+  @Test func userIsTheLoginLocalPart() {
+    #expect(SSHAccess.user(login: "adam@askclara.com") == "adam")
+    #expect(SSHAccess.user(login: "adam") == "adam")
+    #expect(SSHAccess.user(login: nil) == nil)
+    #expect(SSHAccess.user(login: "@x") == nil)
+  }
+
+  @Test func offersOnlyOnlineTailscaleSSHMachines() throws {
+    let d = try defaults()
+    func target(
+      online: Bool = true, keys: [String]? = ["ssh-ed25519 AAAA"], socks: String? = "127.0.0.1:1"
+    )
+      -> ShellTarget?
+    {
+      SSHAccess.target(
+        device: "box.ts.net", ips: ["100.64.0.9"], online: online, hostKeys: keys, tailnet: "work",
+        login: "adam@example.com", socksAddr: socks, defaults: d)
     }
+    let t = try #require(target())
+    #expect(t.user == "adam" && t.host == "100.64.0.9")
+    #expect(target(online: false) == nil)
+    #expect(target(keys: []) == nil)
+    #expect(target(keys: nil) == nil)
+    #expect(target(socks: nil) == nil)
+  }
+
+  @Test func aDenialHidesTheMachineForADay() throws {
+    let d = try defaults()
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    func target(at: Date) -> ShellTarget? {
+      SSHAccess.target(
+        device: "box.ts.net", ips: nil, online: true, hostKeys: ["k"], tailnet: "work",
+        login: "adam@example.com", socksAddr: "127.0.0.1:1", defaults: d, now: at)
+    }
+    let t = try #require(target(at: now))
+    SSHAccess.markDenied(t, defaults: d, now: now)
+    #expect(target(at: now.addingTimeInterval(3600)) == nil)
+    #expect(target(at: now.addingTimeInterval(SSHAccess.denialLifetime + 1)) != nil)
+    // Scoped to the tailnet: the same name elsewhere is unaffected.
+    #expect(
+      SSHAccess.target(
+        device: "box.ts.net", ips: nil, online: true, hostKeys: ["k"], tailnet: "home",
+        login: "adam@example.com", socksAddr: "127.0.0.1:1", defaults: d, now: now) != nil)
   }
 }

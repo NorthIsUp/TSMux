@@ -1,24 +1,15 @@
 import SwiftUI
-import TSMuxKit
 import TSMuxShell
 
-/// The shared shell launcher, pushed from a device row.
+/// A shell pushed from a device row; the row only offers one when there's a
+/// machine to open.
 struct ShellScreen: View {
-  let device: Device
-  let tailnet: ProfileStatus
+  let target: ShellTarget
 
   var body: some View {
-    Group {
-      if let socks = tailnet.socks5Proxy {
-        ShellLauncher(
-          target: .init(
-            device: device.name, host: device.primaryIP ?? device.name, socksAddr: socks,
-            hostKeys: device.sshHostKeys ?? [], tailnet: tailnet.profile))
-      } else {
-        ContentUnavailableView("\(tailnet.name) isn't connected", systemImage: "network.slash")
-      }
-    }
-    .navigationTitle(device.shortName)
-    .navigationBarTitleDisplayMode(.inline)
+    ShellView(target: target)
+      .ignoresSafeArea(.container, edges: .bottom)
+      .navigationTitle(String(target.device.split(separator: ".").first ?? ""))
+      .navigationBarTitleDisplayMode(.inline)
   }
 }
