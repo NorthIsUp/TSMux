@@ -10,6 +10,7 @@
 
 Signed and notarized — open it and drag TSMux to Applications.<br>
 [All releases](https://github.com/NorthIsUp/tsmux/releases) ·
+[iPhone beta (TestFlight)](https://testflight.apple.com/join/BBcpFX3p) ·
 [CLI install](#cli)
 
 </div>
