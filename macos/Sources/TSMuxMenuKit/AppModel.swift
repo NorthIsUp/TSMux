@@ -5,7 +5,7 @@ import TSMuxKit
 
 // ponytail: one shared AppModel, no view-model-per-tab.
 
-enum UIState: Sendable {
+public enum UIState: Sendable {
   case cliMissing
   case down
   case starting
@@ -14,7 +14,7 @@ enum UIState: Sendable {
   case ok([ProfileStatus])
 }
 
-enum ConfigState: Sendable, Equatable {
+public enum ConfigState: Sendable, Equatable {
   case firstRun
   case configured
   case broken(String)
@@ -33,7 +33,8 @@ enum SettingsTab: String, Sendable, CaseIterable {
 }
 
 @MainActor @Observable
-final class AppModel {
+public final class AppModel {
+  @ObservationIgnored public let backend: any Backend
   var status: StatusResult = .daemonDown
   /// `profile list` — the YAML view. Needed for fields `/status` does not
   /// carry (match_root), and as the launch probe.
@@ -45,9 +46,7 @@ final class AppModel {
   var displayProfiles: [ProfileStatus] {
     profiles.isEmpty ? configProfiles.map(ProfileStatus.placeholder) : profiles
   }
-  var configState: ConfigState = .configured
-  var startDeadline: Date?
-  var crashLine: String?
+  public private(set) var configState: ConfigState = .configured
 
   var selectedTab: SettingsTab = .accounts
   var selectedProfile: String?
@@ -57,16 +56,22 @@ final class AppModel {
   /// Bumped after any mutation so open sheets can re-read `profile list`.
   var profilesRevision = 0
 
-  private var daemon: Process?
-  private var daemonErr: Pipe?
-  private var daemonLog: [String] = []
   private var refreshing = false
-  private var expectingExit = false
   private var pacConfirmed = false
   /// Session-scoped by design: a fresh launch is a fresh statement of intent.
   private var stopLatch = false
 
   @ObservationIgnored var onChange: (() -> Void)?
+
+  public init(backend: any Backend) {
+    self.backend = backend
+    backend.onChange = { [weak self] in
+      self?.notify()
+      self?.refresh()
+    }
+  }
+
+  var features: BackendFeatures { backend.features }
 
   // MARK: defaults
 
@@ -75,7 +80,7 @@ final class AppModel {
   static let alwaysCountKey = "alwaysShowCount"
   static let hideDockKey = "hideDockIcon"
   static let connectAtLaunchKey = "connectAtLaunch"
-  static let didShowFirstRunKey = "didShowFirstRun"
+  public static let didShowFirstRunKey = "didShowFirstRun"
 
   var pacApplied: Bool {
     get { UserDefaults.standard.bool(forKey: Self.pacKey) }
@@ -104,12 +109,12 @@ final class AppModel {
   // MARK: derived
 
   var ui: UIState {
-    if CLI.path == nil { return .cliMissing }
-    if startDeadline != nil { return .starting }
+    if !backend.isAvailable { return .cliMissing }
+    if backend.isStarting { return .starting }
     switch status {
     case .ok(let ps): return .ok(ps)
     case .failed(let m): return .failed(m)
-    case .daemonDown: return crashLine.map { .crashed($0) } ?? .down
+    case .daemonDown: return backend.crashLine.map { .crashed($0) } ?? .down
     }
   }
 
@@ -118,24 +123,24 @@ final class AppModel {
     return []
   }
 
-  var weOwnDaemon: Bool { daemon?.isRunning == true }
+  var weOwnDaemon: Bool { backend.ownsService }
 
   /// Tailnets whose node key is inside the warning window, soonest first. A
   /// lapsed key stops that tailnet working until someone signs in again, and
   /// nothing else in the UI says it is coming.
   var expiringProfiles: [ProfileStatus] {
     profiles
-      .filter { ($0.daysUntilExpiry ?? Int.max) <= ExpiryWatch.warnDays }
+      .filter { ($0.daysUntilExpiry ?? Int.max) <= Expiry.warnDays }
       .sorted { ($0.daysUntilExpiry ?? 0) < ($1.daysUntilExpiry ?? 0) }
   }
 
   /// The weekly check, on or off. The LaunchAgent file is the state — there is
   /// no second copy in defaults to drift out of step with it.
   var expiryWatchEnabled: Bool {
-    get { ExpiryWatch.isInstalled }
+    get { backend.expiryWatchInstalled }
     set {
       do {
-        try newValue ? ExpiryWatch.install() : ExpiryWatch.remove()
+        try backend.setExpiryWatch(newValue)
       } catch {
         Alert.show(
           newValue ? "Could not schedule the weekly check" : "Could not remove the weekly check",
@@ -160,11 +165,11 @@ final class AppModel {
   // MARK: launch
 
   /// Synchronous and cheap — `profile list` never starts tsnet or binds a port.
-  func launchProbe() {
+  func launchProbe() async {
     reloadConfigProfiles()
     guard configState == .configured else { return }
     // A daemon already up (a terminal, or a second copy of the app) is adopted.
-    if case .ok = CLI.status() {
+    if case .ok = await backend.status() {
       refresh()
       return
     }
@@ -172,7 +177,7 @@ final class AppModel {
   }
 
   func reloadConfigProfiles() {
-    switch CLI.profileList() {
+    switch backend.profileList() {
     case .success(let list):
       configProfiles = list
       configState = list.isEmpty ? .firstRun : .configured
@@ -189,33 +194,28 @@ final class AppModel {
 
   // MARK: refresh
 
-  func refresh() {
-    guard CLI.path != nil, !refreshing else { return }
+  public func refresh() {
+    guard backend.isAvailable, !refreshing else { return }
     refreshing = true
-    Task.detached(priority: .utility) {
-      let next = CLI.status()
-      await MainActor.run { self.apply(next) }
+    Task {
+      apply(await backend.status())
     }
   }
 
   private func apply(_ next: StatusResult) {
     refreshing = false
     status = next
+    backend.observe(next)
     if case .ok(let ps) = next {
-      startDeadline = nil
-      crashLine = nil
       // The product promise is that a tailnet name just resolves. Requiring a
       // menu click for that is the whole problem, so route by default once a
       // tailnet is actually up — and stop if the user ever turns it off.
-      if pacAuto, !pacApplied, ps.contains(where: { $0.condition == .running }) {
+      if features.contains(.pacToggle), pacAuto, !pacApplied,
+        ps.contains(where: { $0.condition == .running })
+      {
         applyPAC(auto: true)
       }
       if !expiringProfiles.isEmpty { noticeExpiry() }
-    } else if let deadline = startDeadline, Date() > deadline {
-      startDeadline = nil
-      if crashLine == nil {
-        crashLine = daemonLog.last ?? "tsmux did not come up within 60 seconds"
-      }
     }
     notify()
   }
@@ -231,122 +231,29 @@ final class AppModel {
     let last = UserDefaults.standard.object(forKey: Self.expiryNoticeKey) as? Date
     guard last == nil || last! < today else { return }
     UserDefaults.standard.set(Date(), forKey: Self.expiryNoticeKey)
-    ExpiryWatch.checkNow()
+    backend.checkExpiryNow()
   }
 
-  // MARK: daemon lifecycle
+  // MARK: lifecycle
 
   func start() {
     stopLatch = false
-    startDaemon()
-  }
-
-  private func startDaemon() {
-    guard let exe = CLI.path, daemon?.isRunning != true else { return }
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: exe)
-    p.arguments = ["up"]
-    p.standardOutput = FileHandle.nullDevice
-    let errPipe = Pipe()
-    p.standardError = errPipe
-    errPipe.fileHandleForReading.readabilityHandler = { handle in
-      let chunk = handle.availableData
-      // EOF: the source otherwise fires forever on empty data and pegs a core.
-      guard !chunk.isEmpty else {
-        handle.readabilityHandler = nil
-        return
-      }
-      guard let text = String(data: chunk, encoding: .utf8) else { return }
-      Task { @MainActor in self.appendLog(text) }
-    }
-    p.terminationHandler = { proc in
-      Task { @MainActor in self.daemonExited(status: proc.terminationStatus) }
-    }
-    do {
-      try p.run()
-    } catch {
-      daemon = nil
-      Alert.show("Could not start tsmux", (error as NSError).localizedDescription)
-      return
-    }
-    daemon = p
-    daemonErr = errPipe
-    daemonLog.removeAll()
-    crashLine = nil
-    startDeadline = Date().addingTimeInterval(60)
-    notify()
-  }
-
-  private func appendLog(_ text: String) {
-    for line in text.split(separator: "\n") where !line.isEmpty {
-      daemonLog.append(String(line))
-    }
-    if daemonLog.count > 200 { daemonLog.removeFirst(daemonLog.count - 200) }
-  }
-
-  var lastDaemonLine: String? { daemonLog.last }
-
-  private func daemonExited(status code: Int32) {
-    daemon = nil
-    startDeadline = nil
-    daemonErr?.fileHandleForReading.readabilityHandler = nil
-    daemonErr = nil
-    if code != 0 && !expectingExit {
-      crashLine = daemonLog.last ?? "tsmux exited with status \(code)"
-    }
-    expectingExit = false
-    refresh()
+    backend.start()
   }
 
   func stop() {
     stopLatch = true
-    stopDaemon()
-  }
-
-  /// Stops whatever daemon is up, not just one we spawned: a daemon started
-  /// from a terminal still holds the profiles, and refusing to act on it turns
-  /// an ordinary "remove this tailnet" into an error the user cannot clear.
-  private func stopDaemon() {
-    Self.awaitExit(beginStop())
+    if pacApplied { restorePAC(silent: false) }
+    backend.stop()
     finishStop()
   }
 
   /// The same, with the waiting off the main thread: it can take seconds, and
   /// the menu and every open sheet freeze for as long as it blocks.
-  private func stopDaemonAsync() async {
-    let d = beginStop()
-    await Task.detached { Self.awaitExit(d) }.value
-    finishStop()
-  }
-
-  /// Returns our daemon if it was running; nil means one from elsewhere, or none.
-  private func beginStop() -> Process? {
+  private func stopAsync() async {
     if pacApplied { restorePAC(silent: false) }
-    var ours: Process?
-    if let d = daemon, d.isRunning {
-      expectingExit = true
-      d.terminate()
-      ours = d
-    }
-    daemon = nil
-    startDeadline = nil
-    return ours
-  }
-
-  private nonisolated static func awaitExit(_ d: Process?) {
-    if let d {
-      let deadline = Date().addingTimeInterval(5)
-      while d.isRunning && Date() < deadline { usleep(50_000) }
-    } else {
-      _ = CLI.run(["down"], timeout: 10)
-    }
-    // The process being gone is not the same as the port being free; the CLI
-    // refuses to mutate while /status still answers.
-    let deadline = Date().addingTimeInterval(8)
-    while Date() < deadline {
-      if case .daemonDown = CLI.status() { break }
-      usleep(100_000)
-    }
+    await backend.stopAndWait()
+    finishStop()
   }
 
   private func finishStop() {
@@ -356,11 +263,13 @@ final class AppModel {
 
   private var lastMutation: Task<Void, Never>?
 
-  /// `profile add`/`rm` cannot run against a live daemon (D5), so bracket them.
-  /// The stop and the change itself run off the main thread, one at a time: a
-  /// cancel pressed mid-add must not remove the profile before the add lands.
+  /// `profile add`/`rm` cannot run against a live daemon (D5), so bracket them
+  /// when the backend says so. One at a time: a cancel pressed mid-add must
+  /// not remove the profile before the add lands.
   @discardableResult
-  func mutateProfiles<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+  func mutateProfiles<T: Sendable>(_ body: @escaping @MainActor (any Backend) async -> T) async
+    -> T
+  {
     let previous = lastMutation
     let task = Task {
       await previous?.value
@@ -370,12 +279,15 @@ final class AppModel {
     return await task.value
   }
 
-  private func mutateNow<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> T {
+  private func mutateNow<T: Sendable>(_ body: @escaping @MainActor (any Backend) async -> T)
+    async -> T
+  {
     // Any live daemon blocks the mutation, whether or not we started it.
+    let restart = features.contains(.editsNeedRestart)
     let wasRunning = daemonRunning
     let countBefore = configProfiles.count
-    if wasRunning { await stopDaemonAsync() }
-    let result = await Task.detached(operation: body).value
+    if restart && wasRunning { await stopAsync() }
+    let result = await body(backend)
     profilesRevision += 1
     reloadConfigProfiles()
     // Adding a tailnet is a fresh statement of intent; emptying the config is
@@ -386,7 +298,7 @@ final class AppModel {
     } else if configProfiles.isEmpty {
       stopLatch = true
     }
-    if configState == .configured, wasRunning || !stopLatch { startDaemon() }
+    if restart, configState == .configured, wasRunning || !stopLatch { backend.start() }
     refresh()
     return result
   }
@@ -430,31 +342,36 @@ final class AppModel {
   }
 
   private func applyPAC(auto: Bool) {
-    let (_, err, code) = CLI.run(["pac", "apply"], timeout: nil)
-    if code == 0 {
-      pacApplied = true
-      notify()
-    } else if !auto {
-      Alert.show("Could not route system traffic", CLI.message(err))
+    Task {
+      if let err = await backend.applyPAC() {
+        if !auto { Alert.show("Could not route system traffic", err.message) }
+      } else {
+        pacApplied = true
+        notify()
+      }
     }
   }
 
   func restorePAC(silent: Bool) {
-    let (_, err, code) = CLI.run(["pac", "restore"], timeout: nil)
-    if code == 0 {
+    if let err = backend.restorePAC() {
+      if !silent { Alert.show("Could not restore the system proxy", err.message) }
+    } else {
       pacApplied = false
-    } else if !silent {
-      Alert.show("Could not restore the system proxy", CLI.message(err))
     }
   }
 
   // MARK: per-profile prefs
 
-  /// Optimistic-then-authoritative: the caller flips locally, we re-render from
-  /// the Status the CLI hands back.
+  /// Optimistic-then-authoritative: the change shows at once, then the status
+  /// the backend hands back replaces it.
   @discardableResult
-  func setPrefs(_ profile: String, _ flags: [String]) -> String? {
-    switch CLI.json(ProfileStatus.self, ["profile", "set", profile] + flags, timeout: 15) {
+  func setPrefs(_ change: PrefsChange) async -> String? {
+    if case .ok(var ps) = status, let i = ps.firstIndex(where: { $0.profile == change.profile }) {
+      ps[i] = ps[i].applying(change)
+      status = .ok(ps)
+      notify()
+    }
+    switch await backend.setPrefs(change) {
     case .success(let fresh):
       replace(fresh)
       return nil
@@ -465,10 +382,8 @@ final class AppModel {
   }
 
   @discardableResult
-  func logout(_ profile: String) -> String? {
-    // With the daemon down this logs out from a short-lived node, which can
-    // spend the full 15s logout timeout on an unreachable control server.
-    switch CLI.json(ProfileStatus.self, ["profile", "logout", profile], timeout: 40) {
+  func logout(_ profile: String) async -> String? {
+    switch await backend.logout(profile) {
     case .success(let fresh):
       replace(fresh)
       return nil
@@ -487,21 +402,29 @@ final class AppModel {
     }
   }
 
+  func runDoctor() async {
+    switch await backend.doctor() {
+    case .success(let report):
+      let problems = report.problems ?? []
+      Alert.show(
+        problems.isEmpty ? "No problems found" : "\(problems.count) problem(s) found",
+        ([report.config] + problems).joined(separator: "\n\n"))
+    case .failure(let e):
+      Alert.show("Diagnostics failed", e.message)
+    }
+  }
+
   // MARK: shutdown
 
   func shutdown() {
     if pacApplied { restorePAC(silent: true) }
-    guard let d = daemon, d.isRunning else { return }
-    expectingExit = true
-    d.terminate()
-    let deadline = Date().addingTimeInterval(3)
-    while d.isRunning && Date() < deadline { usleep(50_000) }
+    backend.shutdown()
   }
 }
 
-enum Alert {
+public enum Alert {
   @MainActor
-  static func show(_ title: String, _ info: String) {
+  public static func show(_ title: String, _ info: String) {
     let a = NSAlert()
     a.messageText = title
     a.informativeText = info

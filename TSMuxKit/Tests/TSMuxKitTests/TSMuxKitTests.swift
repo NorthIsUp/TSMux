@@ -120,6 +120,17 @@ import Testing
     #expect(body?.keys.sorted() == ["accept_routes", "profile"])
   }
 
+  @Test func pendingPrefsChangeShowsOnlyWhatItSets() throws {
+    let s = try #require(try fixture().first)
+    let before = try #require(s.prefs)
+    var change = PrefsChange(profile: s.profile)
+    change.acceptDNS = !before.acceptDNS
+    let after = try #require(s.applying(change).prefs)
+    #expect(after.acceptDNS == !before.acceptDNS)
+    #expect(after.connected == before.connected)
+    #expect(after.exitNode == before.exitNode)
+  }
+
   @Test func requestRoundTrips() throws {
     let req = try TunnelRequest.addProfile(name: "work", displayName: "Work", controlURL: "")
     let back = try JSONDecoder().decode(TunnelRequest.self, from: JSONEncoder().encode(req))

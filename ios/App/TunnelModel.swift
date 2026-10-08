@@ -133,7 +133,7 @@ final class TunnelModel {
     m.connection.stopVPNTunnel()
   }
 
-  private func send(_ req: TunnelRequest) async throws -> TunnelResponse {
+  func send(_ req: TunnelRequest) async throws -> TunnelResponse {
     guard isConnected, let session = manager?.connection as? NETunnelProviderSession else {
       throw TunnelError(message: "TSMux is off.")
     }

@@ -1,6 +1,5 @@
 import AppKit
 import Foundation
-import Sparkle
 import TSMuxKit
 import TSMuxShell
 
@@ -9,16 +8,17 @@ import TSMuxShell
 // whole UI is built on. The Settings window is SwiftUI; the menu is not.
 
 @MainActor
-final class Controller: NSObject, NSMenuDelegate {
-  let model = AppModel()
+public final class Controller: NSObject, NSMenuDelegate {
+  public let model: AppModel
   private var item: NSStatusItem?
   private let menu = NSMenu()
   private var timer: Timer?
+  private let updater: (any Updater)?
 
-  /// Sparkle. Started here rather than lazily: the updater has to be running to
-  /// do its own scheduled background checks, not only to answer the menu item.
-  private let updater = SPUStandardUpdaterController(
-    startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+  public init(backend: any Backend, updater: (any Updater)?) {
+    model = AppModel(backend: backend)
+    self.updater = updater
+  }
 
   // MARK: launch
 
@@ -35,7 +35,7 @@ final class Controller: NSObject, NSMenuDelegate {
   private var litShown: CGFloat = 0
   private var litTimer: Timer?
 
-  func install() {
+  public func install() async {
     model.onChange = { [weak self] in
       self?.updateIcon()
       self?.refreshLiveRows()
@@ -53,10 +53,10 @@ final class Controller: NSObject, NSMenuDelegate {
       NSLog("tsmux: NSStatusItem has no button — menu bar item will not appear")
     }
     item = i
-    model.launchProbe()
+    await model.launchProbe()
     updateIcon()
     scheduleTimer()
-    if CLI.path == nil {
+    if !model.backend.isAvailable {
       Alert.show("tsmux CLI not found", "TSMux could not find the tsmux executable to talk to.")
     }
   }
@@ -207,7 +207,7 @@ final class Controller: NSObject, NSMenuDelegate {
 
   // MARK: menu
 
-  func menuWillOpen(_ menu: NSMenu) {
+  public func menuWillOpen(_ menu: NSMenu) {
     rebuild()
     model.refresh()
     keyboardDriven = false
@@ -220,7 +220,7 @@ final class Controller: NSObject, NSMenuDelegate {
     hoverTimer = t
   }
 
-  func menuDidClose(_ menu: NSMenu) {
+  public func menuDidClose(_ menu: NSMenu) {
     liveRows.removeAll()
     hoverTimer?.invalidate()
     hoverTimer = nil
@@ -231,7 +231,7 @@ final class Controller: NSObject, NSMenuDelegate {
   /// event at all — invisible on an ordinary item, a painted selection on a
   /// custom-drawn one. A key press is the only highlight worth taking from
   /// here; the pointer is `trackHover`'s job.
-  func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
+  public func menu(_ menu: NSMenu, willHighlight item: NSMenuItem?) {
     guard NSApp.currentEvent?.type == .keyDown else { return }
     keyboardDriven = true
     for host in liveRows.values {
@@ -277,7 +277,7 @@ final class Controller: NSObject, NSMenuDelegate {
       let (symbol, color, label) = Self.daemonAppearance(model.ui, anyUp: anyUp)
       host.state.apply(
         isOn: anyUp,
-        enabled: running ? model.weOwnDaemon : CLI.path != nil,
+        enabled: running ? model.weOwnDaemon : model.backend.isAvailable,
         symbol: symbol, tint: color,
         detail: running && !model.weOwnDaemon ? "started elsewhere" : label)
     }
@@ -371,7 +371,7 @@ final class Controller: NSObject, NSMenuDelegate {
     let (allRow, allHost) = NSMenuItem.toggleRow(
       title: "All tailnets",
       isOn: anyOn,
-      enabled: running ? model.weOwnDaemon : CLI.path != nil,
+      enabled: running ? model.weOwnDaemon : model.backend.isAvailable,
       symbol: dSymbol, tint: dColor,
       detail: running && !model.weOwnDaemon ? "started elsewhere" : dLabel
     ) { [weak self] on in
@@ -386,16 +386,18 @@ final class Controller: NSObject, NSMenuDelegate {
     // rows above it. It is also the only `state` this menu ever set, and a
     // checkmark anywhere makes AppKit reserve a state column that shifts every
     // plain row's glyph — which the custom rows above cannot follow.
-    let (pacRow, pacHost) = NSMenuItem.toggleRow(
-      title: "Route all traffic",
-      isOn: model.pacApplied,
-      enabled: model.profiles.contains { $0.condition == .running },
-      symbol: "globe"
-    ) { [weak self] _ in
-      self?.model.togglePAC()
+    if model.features.contains(.pacToggle) {
+      let (pacRow, pacHost) = NSMenuItem.toggleRow(
+        title: "Route all traffic",
+        isOn: model.pacApplied,
+        enabled: model.profiles.contains { $0.condition == .running },
+        symbol: "globe"
+      ) { [weak self] _ in
+        self?.model.togglePAC()
+      }
+      liveRows[Self.pacRowKey] = pacHost
+      menu.addItem(pacRow)
     }
-    liveRows[Self.pacRowKey] = pacHost
-    menu.addItem(pacRow)
 
     menu.addItem(.separator())
 
@@ -405,7 +407,8 @@ final class Controller: NSObject, NSMenuDelegate {
     menu.addItem(advancedItem())
     menu.addItem(
       action(
-        model.weOwnDaemon ? "Quit TSMux (stops tailnets)" : "Quit TSMux", #selector(quit),
+        model.weOwnDaemon && model.features.contains(.quitStopsService)
+          ? "Quit TSMux (stops tailnets)" : "Quit TSMux", #selector(quit),
         key: "q", symbol: "power"))
   }
 
@@ -428,8 +431,12 @@ final class Controller: NSObject, NSMenuDelegate {
     line.toolTip = msg
     menu.addItem(line)
     menu.addItem(.separator())
-    menu.addItem(action("Open Configuration…", #selector(openConfig), symbol: "doc.text"))
-    menu.addItem(action("Run Diagnostics…", #selector(runDoctor), symbol: "stethoscope"))
+    if model.backend.configFile != nil {
+      menu.addItem(action("Open Configuration…", #selector(openConfig), symbol: "doc.text"))
+    }
+    if model.features.contains(.diagnostics) {
+      menu.addItem(action("Run Diagnostics…", #selector(runDoctor), symbol: "stethoscope"))
+    }
     menu.addItem(.separator())
     menu.addItem(action("Quit TSMux", #selector(quit), key: "q", symbol: "power"))
   }
@@ -439,23 +446,31 @@ final class Controller: NSObject, NSMenuDelegate {
     top.image = Self.menuGlyph("wrench.and.screwdriver")
     let sub = NSMenu()
     sub.autoenablesItems = false
-    let copyPac = action("Copy PAC URL", #selector(copyPAC), symbol: "doc.on.doc")
-    copyPac.isEnabled = model.profiles.contains { $0.condition == .running }
-    sub.addItem(copyPac)
-    sub.addItem(action("Edit config.yaml…", #selector(openConfig), symbol: "doc.text"))
-    sub.addItem(action("Run Diagnostics…", #selector(runDoctor), symbol: "stethoscope"))
-    sub.addItem(.separator())
+    if model.features.contains(.pacToggle) {
+      let copyPac = action("Copy PAC URL", #selector(copyPAC), symbol: "doc.on.doc")
+      copyPac.isEnabled = model.profiles.contains { $0.condition == .running }
+      sub.addItem(copyPac)
+    }
+    if model.backend.configFile != nil {
+      sub.addItem(action("Edit config.yaml…", #selector(openConfig), symbol: "doc.text"))
+    }
+    if model.features.contains(.diagnostics) {
+      sub.addItem(action("Run Diagnostics…", #selector(runDoctor), symbol: "stethoscope"))
+    }
+    if sub.numberOfItems > 0 { sub.addItem(.separator()) }
     sub.addItem(
       action(
         "TSMux on GitHub…", #selector(openRepo), symbol: "chevron.left.forwardslash.chevron.right"))
     sub.addItem(
       action("Report an Issue…", #selector(reportIssue), symbol: "exclamationmark.bubble"))
-    let update = action(
-      "Check for Updates…", #selector(checkForUpdates), symbol: "arrow.down.circle")
-    // Sparkle disables its own check while one is in flight; without
-    // autoenablesItems the menu will not ask, so mirror it here.
-    update.isEnabled = updater.updater.canCheckForUpdates
-    sub.addItem(update)
+    if let updater {
+      let update = action(
+        "Check for Updates…", #selector(checkForUpdates), symbol: "arrow.down.circle")
+      // Sparkle disables its own check while one is in flight; without
+      // autoenablesItems the menu will not ask, so mirror it here.
+      update.isEnabled = updater.canCheckForUpdates
+      sub.addItem(update)
+    }
     top.submenu = sub
     return top
   }
@@ -599,8 +614,12 @@ final class Controller: NSObject, NSMenuDelegate {
   }
 
   private func setConnected(_ profile: String, _ on: Bool) {
-    if let err = model.setPrefs(profile, ["--connected=\(on)"]) {
-      Alert.show(on ? "Could not connect \(profile)" : "Could not disconnect \(profile)", err)
+    var change = PrefsChange(profile: profile)
+    change.connected = on
+    Task {
+      if let err = await model.setPrefs(change) {
+        Alert.show(on ? "Could not connect \(profile)" : "Could not disconnect \(profile)", err)
+      }
     }
   }
 
@@ -717,7 +736,7 @@ final class Controller: NSObject, NSMenuDelegate {
   /// typo'd name yields nil and the row loses its icon, and a one-colour
   /// palette on a `.fill` symbol fills the glyph too. The green tick shipped
   /// as a green disc for exactly that reason.
-  static func iconSelfCheck() -> Bool {
+  public static func iconSelfCheck() -> Bool {
     var symbols = ProfileStatus.Condition.allCases.map { appearance($0, state: "").0 }
     symbols += [true, false].map { daemonAppearance(.ok([]), anyUp: $0).0 }
     symbols += [UIState.starting, .down, .crashed(""), .failed(""), .cliMissing]
@@ -802,7 +821,7 @@ final class Controller: NSObject, NSMenuDelegate {
   /// would open behind whatever is frontmost.
   @objc private func checkForUpdates() {
     NSApp.activate()
-    updater.checkForUpdates(nil)
+    updater?.checkForUpdates()
   }
 
   @objc private func openRepo() { NSWorkspace.shared.open(Project.repo) }
@@ -825,11 +844,13 @@ final class Controller: NSObject, NSMenuDelegate {
   }
 
   @objc private func copyPAC() {
-    guard let url = CLI.pacURL() else {
-      Alert.show("Could not get the PAC URL", "tsmux reported no details.")
-      return
+    Task {
+      guard let url = await model.backend.pacURL() else {
+        Alert.show("Could not get the PAC URL", "tsmux reported no details.")
+        return
+      }
+      copy(url)
     }
-    copy(url)
   }
 
   @objc private func openLogin(_ sender: NSMenuItem) {
@@ -844,8 +865,9 @@ final class Controller: NSObject, NSMenuDelegate {
 
   /// Never invents a file: with no config the Add-tailnet sheet is the answer.
   @objc private func openConfig() {
-    let file = ConfigPath.file
-    guard FileManager.default.fileExists(atPath: file.path) else {
+    guard let file = model.backend.configFile,
+      FileManager.default.fileExists(atPath: file.path)
+    else {
       addTailnet()
       return
     }
@@ -855,19 +877,10 @@ final class Controller: NSObject, NSMenuDelegate {
   }
 
   @objc private func runDoctor() {
-    let (data, err, code) = CLI.run(["--json", "doctor"], timeout: 30)
-    // doctor exits 1 when it merely found problems, so read the JSON not the code.
-    if let report = try? JSONDecoder().decode(DoctorReport.self, from: data) {
-      let problems = report.problems ?? []
-      Alert.show(
-        problems.isEmpty ? "No problems found" : "\(problems.count) problem(s) found",
-        ([report.config] + problems).joined(separator: "\n\n"))
-      return
-    }
-    Alert.show("Diagnostics failed", code == 0 ? "tsmux produced no report." : CLI.message(err))
+    Task { await model.runDoctor() }
   }
 
-  func shutdown() {
+  public func shutdown() {
     timer?.invalidate()
     model.shutdown()
   }
@@ -883,16 +896,5 @@ final class Controller: NSObject, NSMenuDelegate {
     DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
       MainActor.assumeIsolated { self.updateIcon() }
     }
-  }
-}
-
-enum ConfigPath {
-  static var file: URL {
-    let base =
-      ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : $0 }
-      ?? ("~/.config" as NSString).expandingTildeInPath
-    return URL(fileURLWithPath: base)
-      .appendingPathComponent("tsmux")
-      .appendingPathComponent("config.yaml")
   }
 }

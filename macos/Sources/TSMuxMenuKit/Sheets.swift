@@ -16,14 +16,21 @@ struct RemoveTailnetSheet: View {
           + "Other tailnets keep running."
       )
       .fixedSize(horizontal: false, vertical: true)
-      Toggle("Also delete saved credentials", isOn: $purge)
-      Text(
-        "Turning this on also logs the device out of the tailnet. Leave it off to keep the "
-          + "saved login so re-adding does not need a new sign-in."
-      )
-      .font(.footnote)
-      .foregroundStyle(.secondary)
-      .fixedSize(horizontal: false, vertical: true)
+      if model.features.contains(.keepLoginOnRemove) {
+        Toggle("Also delete saved credentials", isOn: $purge)
+        Text(
+          "Turning this on also logs the device out of the tailnet. Leave it off to keep the "
+            + "saved login so re-adding does not need a new sign-in."
+        )
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      } else {
+        Text("This also logs the device out of the tailnet and deletes its saved login.")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
       Spacer()
       HStack {
         Spacer()
@@ -37,15 +44,14 @@ struct RemoveTailnetSheet: View {
   }
 
   private func remove() {
-    var args = ["profile", "rm", profile.profile]
-    if purge { args.append("--purge") }
+    let key = profile.profile
+    let purge = purge
     let name = profile.name
     model.selectedProfile = nil
     dismiss()
     Task {
-      let outcome = await model.mutateProfiles { [args] in
-        // Purging logs out on the control server first, which can take up to 15s.
-        CLI.json(RemovedProfile.self, args, timeout: 40)
+      let outcome = await model.mutateProfiles { backend in
+        await backend.removeProfile(key, purge: purge)
       }
       switch outcome {
       case .success(let r):
@@ -129,7 +135,11 @@ struct DNSSheet: View {
   private var acceptDNS: Binding<Bool> {
     Binding(
       get: { profile.prefs?.acceptDNS ?? false },
-      set: { inlineError = model.setPrefs(profile.profile, ["--accept-dns=\($0)"]) })
+      set: { on in
+        var change = PrefsChange(profile: profile.profile)
+        change.acceptDNS = on
+        Task { inlineError = await model.setPrefs(change) }
+      })
   }
 }
 
