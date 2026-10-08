@@ -19,6 +19,14 @@ public enum SettingsScene {
     }
     appMenu.performActionForItem(at: i)
   }
+
+  /// Brings Settings back in front of whatever took focus: the browser after
+  /// sign-in, or the system's VPN prompt. An accessory app isn't reactivated
+  /// when those go away.
+  @MainActor public static func raise() {
+    NSApp.activate()
+    NSApp.windows.first { $0.isVisible && $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
+  }
 }
 
 /// One sidebar, not a tab bar. `NavigationSplitView` owns the window root,

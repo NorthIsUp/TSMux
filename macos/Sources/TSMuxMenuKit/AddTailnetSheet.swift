@@ -226,6 +226,7 @@ struct AddTailnetSheet: View {
           name = suggested
           result = p
           pane = .naming
+          SettingsScene.raise()
           return
         }
       }
