@@ -1,7 +1,6 @@
 import SwiftUI
 import TSMuxKit
 import TSMuxShell
-import UIKit
 
 struct DevicesView: View {
   let profile: String
@@ -94,7 +93,7 @@ private struct DeviceRow: View {
   }
 
   private func copy(_ s: String) {
-    UIPasteboard.general.string = s
+    Pasteboard.copy(s)
     copied = true
     Task {
       try? await Task.sleep(for: .seconds(1.5))

@@ -1,36 +1,18 @@
-"""Exit 0 once App Store Connect lists the .ipa's build, 1 if it never does.
+"""Exit 0 once App Store Connect lists an export's (.ipa or .pkg) build, 1 if it never does.
 
 Used when Transporter reports a failed upload: it has done so for uploads
 that went through, so ask App Store Connect rather than trusting the exit code.
 """
 
-import glob
 import json
-import os
-import plistlib
 import sys
 import time
 import urllib.request
-import zipfile
 
-import jwt
+from asc_build import bundle_version, token
 
 APP_ID = "6819539345"
 WAIT_SECONDS = 600
-
-
-def bundle_version(ipa: str) -> str:
-    with zipfile.ZipFile(ipa) as z:
-        name = next(n for n in z.namelist() if n.count("/") == 2 and n.endswith(".app/Info.plist"))
-        return plistlib.loads(z.read(name))["CFBundleVersion"]
-
-
-def token() -> str:
-    key_id, issuer = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
-    (path,) = glob.glob(os.path.expanduser(f"~/.appstoreconnect/private_keys/AuthKey_{key_id}.p8"))
-    now = int(time.time())
-    claims = {"iss": issuer, "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"}
-    return jwt.encode(claims, open(path).read(), algorithm="ES256", headers={"kid": key_id})
 
 
 def landed(version: str) -> bool:

@@ -1,28 +1,24 @@
 """Post-upload App Store Connect steps for TSMux builds.
 
-  setup        test info, review contact (copied from another of the team's
-               apps so the phone number stays out of this repo) and the
-               "public" group with its public link; safe to rerun
-  attach IPA   wait for the .ipa's build to process and attach it to the iOS
-               App Store version, which is where App Store Connect's app
-               grid takes its icon from; nothing is submitted
-  ship IPA     wait for the .ipa's build to process, add it to "public" and
-               submit it for Beta App Review
+  setup          test info, review contact (copied from another of the team's
+                 apps so the phone number stays out of this repo) and the
+                 "public" group with its public link; safe to rerun
+  attach EXPORT  wait for an .ipa's or .pkg's build to process and attach it
+                 to its platform's App Store version, which is where App
+                 Store Connect's app grid takes its icon from; submits nothing
+  ship EXPORT    wait for the build to process, add it to "public" and
+                 submit it for Beta App Review
 
 env: ASC_KEY_ID, ASC_ISSUER_ID; key at ~/.appstoreconnect/private_keys.
 """
 
-import glob
 import json
-import os
-import plistlib
 import sys
 import time
 import urllib.error
 import urllib.request
-import zipfile
 
-import jwt
+from asc_build import bundle_version, platform, token
 
 APP_ID = "6819539345"
 CONTACT_FROM_APP = "6816750932"
@@ -41,14 +37,6 @@ REVIEW_NOTES = (
     "Microsoft, GitHub or Apple on Tailscale's page. No demo account is needed. Turn "
     "on the VPN switch, then open any machine's name in Safari."
 )
-
-
-def token() -> str:
-    key_id, issuer = os.environ["ASC_KEY_ID"], os.environ["ASC_ISSUER_ID"]
-    (path,) = glob.glob(os.path.expanduser(f"~/.appstoreconnect/private_keys/AuthKey_{key_id}.p8"))
-    now = int(time.time())
-    claims = {"iss": issuer, "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"}
-    return jwt.encode(claims, open(path).read(), algorithm="ES256", headers={"kid": key_id})
 
 
 def call(method: str, path: str, body: dict | None = None) -> dict:
@@ -106,12 +94,6 @@ def setup() -> None:
     print(g["attributes"]["publicLink"])
 
 
-def bundle_version(ipa: str) -> str:
-    with zipfile.ZipFile(ipa) as z:
-        name = next(n for n in z.namelist() if n.count("/") == 2 and n.endswith(".app/Info.plist"))
-        return plistlib.loads(z.read(name))["CFBundleVersion"]
-
-
 def processed(ipa: str) -> str:
     version = bundle_version(ipa)
     deadline = time.monotonic() + PROCESS_SECONDS
@@ -127,15 +109,15 @@ def processed(ipa: str) -> str:
 
 
 def attach(ipa: str) -> None:
-    versions = call("GET", f"/apps/{APP_ID}/appStoreVersions?filter[platform]=IOS"
+    versions = call("GET", f"/apps/{APP_ID}/appStoreVersions?filter[platform]={platform(ipa)}"
                     "&filter[appStoreState]=PREPARE_FOR_SUBMISSION")["data"]
     if not versions:
-        print("no iOS version in Prepare for Submission; nothing to attach to")
+        print(f"no {platform(ipa)} version in Prepare for Submission; nothing to attach to")
         return
     build = processed(ipa)
     call("PATCH", f"/appStoreVersions/{versions[0]['id']}/relationships/build",
          {"data": {"type": "builds", "id": build}})
-    print(f"build {bundle_version(ipa)} is attached to iOS {versions[0]['attributes']['versionString']}")
+    print(f"build {bundle_version(ipa)} is attached to {platform(ipa)} {versions[0]['attributes']['versionString']}")
 
 
 def ship(ipa: str) -> None:

@@ -72,8 +72,10 @@ jobs:
     env:
       HAS_DEVID: ${{ secrets.DEVID_P12 != '' }}
       HAS_IOS_SIGNING: ${{ secrets.DIST_P12_BASE64 != '' }}
+      HAS_MAC_STORE: ${{ secrets.MAC_APP_PROFILE_BASE64 != '' && secrets.DIST_P12_BASE64 != '' }}
     outputs:
       exported: ${{ steps.export.outcome == 'success' }}
+      exported_mac: ${{ steps.export_mac.outcome == 'success' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -96,6 +98,9 @@ jobs:
           DIST_P12_PASSWORD: ${{ secrets.DIST_P12_PASSWORD }}
           APP_PROFILE_BASE64: ${{ secrets.APP_PROFILE_BASE64 }}
           TUNNEL_PROFILE_BASE64: ${{ secrets.TUNNEL_PROFILE_BASE64 }}
+          INSTALLER_P12: ${{ secrets.INSTALLER_P12 }}
+          MAC_APP_PROFILE_BASE64: ${{ secrets.MAC_APP_PROFILE_BASE64 }}
+          MAC_TUNNEL_PROFILE_BASE64: ${{ secrets.MAC_TUNNEL_PROFILE_BASE64 }}
         run: |
           if [ "$HAS_DEVID" = true ]; then
             printf '%s\n%s\n' "$P12_PASSWORD" "$DEVID_P12" | scripts/ci-keychain.sh
@@ -106,6 +111,14 @@ jobs:
             mkdir -p "$profiles"
             printf '%s' "$APP_PROFILE_BASE64" | base64 -D > "$profiles/tsmux-app.mobileprovision"
             printf '%s' "$TUNNEL_PROFILE_BASE64" | base64 -D > "$profiles/tsmux-tunnel.mobileprovision"
+          fi
+          if [ "$HAS_MAC_STORE" = true ]; then
+            # The installer cert signs the .pkg; it shares the Developer ID p12's password.
+            printf '%s\n%s\n' "$P12_PASSWORD" "$INSTALLER_P12" | scripts/ci-keychain.sh
+            profiles="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+            mkdir -p "$profiles"
+            printf '%s' "$MAC_APP_PROFILE_BASE64" | base64 -D > "$profiles/tsmux-mac-app.provisionprofile"
+            printf '%s' "$MAC_TUNNEL_PROFILE_BASE64" | base64 -D > "$profiles/tsmux-mac-tunnel.provisionprofile"
           fi
 
       - name: Sign the Mac app (not notarized)
@@ -133,14 +146,35 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-  # Every main push lands in internal TestFlight; a push that bumps VERSION
+      # The same App Store app on the Mac: a menu bar app in place of the window.
+      - name: Archive and export macOS (App Store)
+        id: export_mac
+        if: env.HAS_MAC_STORE == 'true'
+        env:
+          PLATFORM: macos
+          INTERNAL_ONLY: '0'
+        run: scripts/ios-testflight.sh --no-upload
+
+      - uses: actions/upload-artifact@v4
+        if: steps.export_mac.outcome == 'success' && github.event_name != 'pull_request'
+        with:
+          name: pkg
+          path: |
+            ios/build/testflight-macos/*.pkg
+            ios/build/testflight-macos/AppStoreInfo.plist
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  # Every main push lands in internal TestFlight (iOS, and macOS once its
+  # secrets exist); a push that bumps VERSION
   # also goes to Beta App Review for the public link. Both mostly wait on
   # Apple, so they run on Linux, where minutes cost a tenth.
   testflight:
     needs: [test, sign]
     if: needs.sign.outputs.exported == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       TRANSPORTER_VERSION: 4.0.0.4
     steps:
@@ -177,6 +211,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ipa
+          path: exports/ios
+
+      - uses: actions/download-artifact@v4
+        if: needs.sign.outputs.exported_mac == 'true'
+        with:
+          name: pkg
+          path: exports/macos
 
       # Relative paths at the default log level fail the .ipa with no reason;
       # absolute paths at eXtreme upload. The full log is kept only on failure.
@@ -188,31 +229,32 @@ jobs:
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
           printf '%s' "$ASC_KEY_P8" > "$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
-          if ~/itms/bin/iTMSTransporter -m upload -assetFile "$PWD/TSMux.ipa" -assetDescription "$PWD/AppStoreInfo.plist" \
-               -apiKey "$ASC_KEY_ID" -apiIssuer "$ASC_ISSUER_ID" -v eXtreme > transporter.log 2>&1; then
-            tail -40 transporter.log
-            exit 0
-          fi
-          grep -v -e 'indexing file' -e 'created symlink' transporter.log | tail -300
-          # Transporter self-updates at launch and has failed with "parts failed"
-          # after the build had in fact landed; App Store Connect is the truth.
           pip install --quiet 'pyjwt[crypto]'
-          python3 scripts/asc-build-landed.py TSMux.ipa
+          for export in "$PWD"/exports/*/TSMux.*; do
+            if ~/itms/bin/iTMSTransporter -m upload -assetFile "$export" \
+                 -assetDescription "$(dirname "$export")/AppStoreInfo.plist" \
+                 -apiKey "$ASC_KEY_ID" -apiIssuer "$ASC_ISSUER_ID" -v eXtreme > transporter.log 2>&1; then
+              tail -40 transporter.log
+              continue
+            fi
+            grep -v -e 'indexing file' -e 'created symlink' transporter.log | tail -300
+            # Transporter self-updates at launch and has failed with "parts failed"
+            # after the build had in fact landed; App Store Connect is the truth.
+            python3 scripts/asc-build-landed.py "$export"
+          done
 
-      - name: Attach the build to the App Store version
+      - name: Attach the builds to their App Store versions
         env:
           ASC_KEY_ID: 238ATU74S4
           ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
-        run: |
-          pip install --quiet 'pyjwt[crypto]'
-          python3 scripts/testflight.py attach TSMux.ipa
+        run: for e in exports/*/TSMux.*; do python3 scripts/testflight.py attach "$e"; done
 
       - name: Submit to the public beta
         if: steps.bump.outputs.public == 'true'
         env:
           ASC_KEY_ID: 238ATU74S4
           ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
-        run: python3 scripts/testflight.py ship TSMux.ipa
+        run: for e in exports/*/TSMux.*; do python3 scripts/testflight.py ship "$e"; done
 
       - uses: actions/upload-artifact@v4
         if: failure()
