@@ -61,12 +61,20 @@
     func start() {
       Task {
         do {
-          try await tunnel.start()
+          try await startTunnel()
         } catch {
           Alert.show("Could not turn on TSMux", error.localizedDescription)
         }
         onChange?()
       }
+    }
+
+    /// The first start shows the system's "Add VPN Configurations" prompt,
+    /// which takes focus and leaves Settings behind whatever was in front.
+    private func startTunnel() async throws {
+      let prompts = tunnel.vpnStatus == .invalid
+      defer { if prompts { SettingsScene.raise() } }
+      try await tunnel.start()
     }
 
     func stop() {
@@ -113,7 +121,7 @@
       async -> Result<Void, CLIError>
     {
       await call {
-        try await self.tunnel.start()
+        try await self.startTunnel()
         _ = try await self.tunnel.send(
           .addProfile(name: key, displayName: displayName, controlURL: controlURL ?? "")
         ).decode(ProfileEditResult.self)

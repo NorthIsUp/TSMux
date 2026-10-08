@@ -97,16 +97,27 @@ final class TunnelModel {
       always.interfaceTypeMatch = .any
       m.onDemandRules = [always]
       m.isOnDemandEnabled = true
+      NSLog("tsmux: saving the VPN configuration")
       try await m.saveToPreferences()
       // A freshly saved configuration can't start until it is loaded back.
       try await m.loadFromPreferences()
       manager = m
+      NSLog("tsmux: VPN configuration saved, status \(m.connection.status.rawValue)")
     }
     updateStatus()
     if isConnected { return }
     // Saving with on-demand on may already have started it.
     if [.disconnected, .invalid].contains(m.connection.status) {
-      try m.connection.startVPNTunnel()
+      do {
+        try m.connection.startVPNTunnel()
+      } catch {
+        // Right after the system's "Add VPN Configurations" prompt the new
+        // configuration can refuse its first start; a reload lets it through.
+        NSLog("tsmux: first start failed, retrying: \(error)")
+        try await Task.sleep(for: .seconds(1))
+        try await m.loadFromPreferences()
+        try m.connection.startVPNTunnel()
+      }
     }
     for _ in 0..<60 where !isConnected {
       try await Task.sleep(for: .milliseconds(250))
