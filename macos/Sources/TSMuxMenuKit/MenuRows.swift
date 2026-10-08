@@ -52,9 +52,11 @@ final class MenuRowState {
 /// on/off. A verb ("Stop tsmux") makes the reader work out the current state
 /// from the word; a switch shows it.
 struct MenuRow: View {
-  private static let submenuArrow =
-    NSImage(named: "NSMenuSubmenuTemplate")
-    ?? NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)!
+  private static let submenuArrow = NSImage(
+    systemSymbolName: "chevron.right", accessibilityDescription: nil
+  )!.withSymbolConfiguration(
+    .init(pointSize: NSFont.menuFont(ofSize: 0).pointSize, weight: .semibold)
+  )!
 
   @Bindable var state: MenuRowState
   let onToggle: (Bool) -> Void
@@ -105,9 +107,9 @@ struct MenuRow: View {
       // A custom view suppresses AppKit's own disclosure arrow, so rows that
       // open a submenu draw their own. The column is always reserved, visible
       // or not, otherwise the switches sit at two different x positions
-      // depending on whether a row happens to have a submenu. AppKit's own
-      // arrow image, so it matches the ordinary rows' exactly; a "›" glyph
-      // came out smaller and lighter.
+      // depending on whether a row happens to have a submenu. macOS 26 draws a
+      // chevron; NSMenuSubmenuTemplate is still the old triangle, and a "›"
+      // glyph came out smaller and lighter.
       Image(nsImage: Self.submenuArrow)
         .renderingMode(.template)
         .foregroundStyle(state.highlighted ? Color(.selectedMenuItemTextColor) : .primary)
