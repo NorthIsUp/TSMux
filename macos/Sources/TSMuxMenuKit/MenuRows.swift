@@ -52,6 +52,10 @@ final class MenuRowState {
 /// on/off. A verb ("Stop tsmux") makes the reader work out the current state
 /// from the word; a switch shows it.
 struct MenuRow: View {
+  private static let submenuArrow =
+    NSImage(named: "NSMenuSubmenuTemplate")
+    ?? NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)!
+
   @Bindable var state: MenuRowState
   let onToggle: (Bool) -> Void
 
@@ -101,11 +105,14 @@ struct MenuRow: View {
       // A custom view suppresses AppKit's own disclosure arrow, so rows that
       // open a submenu draw their own. The column is always reserved, visible
       // or not, otherwise the switches sit at two different x positions
-      // depending on whether a row happens to have a submenu.
-      Text("\u{203A}")
+      // depending on whether a row happens to have a submenu. AppKit's own
+      // arrow image, so it matches the ordinary rows' exactly; a "›" glyph
+      // came out smaller and lighter.
+      Image(nsImage: Self.submenuArrow)
+        .renderingMode(.template)
         .foregroundStyle(state.highlighted ? Color(.selectedMenuItemTextColor) : .primary)
         .opacity(state.submenu ? 1 : 0)
-        .frame(width: 8)
+        .frame(width: Self.submenuArrow.size.width)
     }
     .font(.system(size: NSFont.menuFont(ofSize: 0).pointSize))
     // Matches where AppKit indents an ordinary menu item's image. Measured
