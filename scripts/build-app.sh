@@ -82,16 +82,38 @@ if [ "$plist_floor" != "$binary_floor" ]; then
 fi
 codesign --verify --deep --strict "$APP"
 
-# sysextd's own checks, which otherwise only run when a user tries to connect.
+# What sysextd and nesessionmanager require of a Developer ID packet tunnel,
+# which otherwise only surfaces one refusal at a time when a user connects.
 SYSX="$APP/Contents/Library/SystemExtensions/dev.northisup.tsmux.menu.tunnel.systemextension"
-[ "$(/usr/libexec/PlistBuddy -c "Print :CFBundlePackageType" "$SYSX/Contents/Info.plist")" = SYSX ] ||
-  { echo "the system extension's CFBundlePackageType is not SYSX" >&2; exit 1; }
-mach=$(/usr/libexec/PlistBuddy -c "Print :NetworkExtension:NEMachServiceName" "$SYSX/Contents/Info.plist")
-ents=$(mktemp)
-codesign -d --entitlements - --xml "$SYSX" > "$ents" 2>/dev/null
-groups=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$ents" | sed '1d;$d')
-rm -f "$ents"
+fail() { echo "system extension: $*" >&2; exit 1; }
+plist() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null; }
+ents() { codesign -d --entitlements - --xml "$1" 2>/dev/null > "$2"; }
+[ -d "$SYSX" ] || fail "missing at $SYSX"
+[ "$(plist "$SYSX" CFBundlePackageType)" = SYSX ] || fail "CFBundlePackageType is not SYSX"
+[ "$(plist "$SYSX" CFBundleIdentifier).systemextension" = "$(basename "$SYSX")" ] ||
+  fail "bundle name is not its identifier"
+[ -n "$(plist "$SYSX" NSSystemExtensionUsageDescription)" ] || fail "no NSSystemExtensionUsageDescription"
+plist "$SYSX" "NetworkExtension:NEProviderClasses:com.apple.networkextension.packet-tunnel" >/dev/null ||
+  fail "no packet-tunnel provider class"
+for b in "$APP" "$SYSX"; do
+  [ -f "$b/Contents/embedded.provisionprofile" ] || fail "no embedded profile in $b"
+done
+tmp=$(mktemp -d)
+ents "$APP" "$tmp/app.plist"
+ents "$SYSX" "$tmp/sysx.plist"
+for f in app sysx; do
+  /usr/libexec/PlistBuddy -c "Print :com.apple.developer.networking.networkextension" "$tmp/$f.plist" |
+    grep -qx ' *packet-tunnel-provider-systemextension' ||
+    fail "$f lacks the packet-tunnel-provider-systemextension entitlement"
+done
+[ "$(/usr/libexec/PlistBuddy -c "Print :com.apple.developer.system-extension.install" "$tmp/app.plist")" = true ] ||
+  fail "the app lacks com.apple.developer.system-extension.install"
+[ "$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.app-sandbox" "$tmp/sysx.plist")" = true ] ||
+  fail "the extension is not sandboxed"
+mach=$(plist "$SYSX" NetworkExtension:NEMachServiceName)
+groups=$(/usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$tmp/sysx.plist" | sed '1d;$d')
+rm -rf "$tmp"
 ok=
 for g in $groups; do case "$mach" in "$g".*) ok=1 ;; esac; done
-[ -n "$ok" ] || { echo "NEMachServiceName $mach starts with none of: $groups" >&2; exit 1; }
+[ -n "$ok" ] || fail "NEMachServiceName $mach starts with none of: $groups"
 echo "built $APP ($BUILD_VERSION)"

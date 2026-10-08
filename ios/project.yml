@@ -212,12 +212,18 @@ targets:
         com.apple.security.application-groups: [4BJBDQVY6M.dev.northisup.tsmux]
         com.apple.security.network.client: true
         com.apple.security.network.server: true
+        # The extension runs as root, and its group container lives under
+        # root's home, which the sandbox doesn't open on its own. Tailscale's
+        # extension carries the same exception.
+        com.apple.security.temporary-exception.files.absolute-path.read-write:
+          - /private/var/root/Library/Group Containers/
     info:
       path: DirectTunnel/Info.plist
       properties:
         CFBundleDisplayName: TSMux Tunnel
-        # Without it sysextd refuses the bundle as belonging to no category.
+        # sysextd refuses a network extension without either of these.
         CFBundlePackageType: SYSX
+        NSSystemExtensionUsageDescription: TSMux routes your tailnets' traffic through this network extension.
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         TSMuxAppGroup: 4BJBDQVY6M.dev.northisup.tsmux
