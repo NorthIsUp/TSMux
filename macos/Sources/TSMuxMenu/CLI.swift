@@ -1,47 +1,9 @@
 import Foundation
 import TSMuxKit
+import TSMuxMenuKit
 
 // Everything the GUI knows comes from `tsmux --json`, so the two stay in step
 // without a second config parser. Swift never speaks HTTP to the daemon.
-
-struct RemovedProfile: Decodable, Sendable {
-  let removed: String
-  let purged: Bool
-  /// Set when a purge could not log the device out on its control server.
-  let warning: String?
-}
-
-struct DoctorReport: Decodable, Sendable {
-  let config: String
-  let problems: [String]?
-}
-
-struct VersionInfo: Decodable, Sendable {
-  let version: String?
-  /// The tailscale.com the CLI was linked against, which is the thing that
-  /// actually changes between most builds.
-  let tailscale: String?
-
-  /// "0.1.0 (ts v1.102.5)". The bundle's own CFBundleShortVersionString stays a
-  /// bare semver — Sparkle and Launch Services both parse it — so the pair only
-  /// ever appears as display text.
-  var display: String {
-    let app = version ?? "—"
-    guard let ts = tailscale, !ts.isEmpty else { return app }
-    return "\(app) (ts \(ts))"
-  }
-}
-
-/// The contract's whole error surface: stderr's last line, `tsmux: ` stripped.
-struct CLIError: Error, Sendable {
-  let message: String
-}
-
-enum StatusResult: Sendable {
-  case ok([ProfileStatus])
-  case daemonDown
-  case failed(String)
-}
 
 // MARK: - Runner
 

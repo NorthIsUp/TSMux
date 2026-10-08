@@ -105,6 +105,28 @@ public struct PrefsChange: Codable, Sendable, Equatable {
   }
 }
 
+extension ProfilePrefs {
+  public func applying(_ c: PrefsChange) -> ProfilePrefs {
+    var p = self
+    if let v = c.connected { p.connected = v }
+    if let v = c.acceptRoutes { p.acceptRoutes = v }
+    if let v = c.acceptDNS { p.acceptDNS = v }
+    if let v = c.shieldsUp { p.shieldsUp = v }
+    if let v = c.exitNode { p.exitNode = v }
+    if let v = c.exitNodeAllowLAN { p.exitNodeAllowLAN = v }
+    return p
+  }
+}
+
+extension ProfileStatus {
+  /// What a pending /prefs change will show, before the reply confirms it.
+  public func applying(_ c: PrefsChange) -> ProfileStatus {
+    var s = self
+    s.prefs = prefs?.applying(c)
+    return s
+  }
+}
+
 struct ProfileEdit: Codable, Sendable {
   var name: String
   var displayName: String?

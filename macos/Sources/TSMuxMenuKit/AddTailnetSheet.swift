@@ -60,7 +60,9 @@ struct AddTailnetSheet: View {
           Text(fatal).font(.callout).foregroundStyle(.secondary)
           Spacer()
           HStack {
-            Button("Run Diagnostics…") { runDoctor() }
+            if model.features.contains(.diagnostics) {
+              Button("Run Diagnostics…") { Task { await model.runDoctor() } }
+            }
             Spacer()
             Button("Close") { cancelSetup(force: true) }
           }
@@ -168,11 +170,11 @@ struct AddTailnetSheet: View {
       HStack {
         if suffix.isEmpty {
           Button("Copy Proxy Address") { copy(proxy) }
-        } else {
+        } else if model.features.contains(.pacToggle) {
           if !model.pacApplied {
             Button("Route System Traffic") { model.togglePAC() }
           }
-          Button("Copy PAC URL") { copy(CLI.pacURL() ?? "") }
+          Button("Copy PAC URL") { Task { copy(await model.backend.pacURL() ?? "") } }
         }
         Spacer()
         Button("Done") { finish() }
@@ -187,18 +189,19 @@ struct AddTailnetSheet: View {
 
   private func start() {
     let k = AddFlow.placeholderKey { k in model.configProfiles.contains { $0.name == k } }
-    var args = ["profile", "add", k, "--display-name", AddFlow.placeholderName]
     let url = controlURL.trimmingCharacters(in: .whitespaces)
-    if !url.isEmpty { args += ["--control-url", url] }
     // D13: bare hostnames go to the only tailnet there is, and no further.
-    if model.configProfiles.isEmpty { args.append("--match-root") }
+    let matchRoot = model.configProfiles.isEmpty
 
     key = k
     pane = .signingIn
     fatal = nil
     elapsed = 0
     Task {
-      let outcome = await model.mutateProfiles { [args] in CLI.json(Profile.self, args, timeout: 20)
+      let outcome = await model.mutateProfiles { backend in
+        await backend.addProfile(
+          k, displayName: AddFlow.placeholderName, controlURL: url.isEmpty ? nil : url,
+          matchRoot: matchRoot)
       }
       if case .failure(let e) = outcome {
         fatal = e.message
@@ -239,14 +242,14 @@ struct AddTailnetSheet: View {
   /// Renaming restarts the daemon, which takes seconds; the sheet shouldn't wait.
   private func finish() {
     guard let key else { return }
-    let args = [
-      "--json", "profile", "rename", key, newKey,
-      "--display-name", name.trimmingCharacters(in: .whitespaces),
-    ]
+    let newKey = newKey
+    let display = name.trimmingCharacters(in: .whitespaces)
     dismiss()
     Task {
-      let (_, err, code) = await model.mutateProfiles { [args] in CLI.run(args, timeout: 20) }
-      if code != 0 { Alert.show("Couldn't rename the tailnet", CLI.message(err)) }
+      let outcome = await model.mutateProfiles { backend in
+        await backend.renameProfile(key, to: newKey, displayName: display)
+      }
+      if case .failure(let e) = outcome { Alert.show("Couldn't rename the tailnet", e.message) }
     }
   }
 
@@ -272,22 +275,8 @@ struct AddTailnetSheet: View {
   /// Removal restarts the daemon too, so it runs after the sheet is gone.
   private func remove(_ key: String) {
     Task {
-      await model.mutateProfiles {
-        CLI.run(["--json", "profile", "rm", key, "--purge"], timeout: 40)
-      }
+      await model.mutateProfiles { backend in await backend.removeProfile(key, purge: true) }
     }
-  }
-
-  private func runDoctor() {
-    let (data, err, code) = CLI.run(["--json", "doctor"], timeout: 30)
-    if let report = try? JSONDecoder().decode(DoctorReport.self, from: data) {
-      let problems = report.problems ?? []
-      Alert.show(
-        problems.isEmpty ? "No problems found" : "\(problems.count) problem(s) found",
-        ([report.config] + problems).joined(separator: "\n\n"))
-      return
-    }
-    Alert.show("Diagnostics failed", code == 0 ? "tsmux produced no report." : CLI.message(err))
   }
 
   private func copy(_ s: String) {

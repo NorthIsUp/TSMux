@@ -16,6 +16,8 @@ packages:
     path: ../TSMuxKit
   TSMuxShell:
     path: ../TSMuxShell
+  TSMuxMenu:
+    path: ../macos
 schemes:
   TSMux:
     build:
@@ -34,6 +36,10 @@ targets:
     dependencies:
       - package: TSMuxKit
       - package: TSMuxShell
+      # The DMG app's menu bar UI, which the Mac build presents instead.
+      - package: TSMuxMenu
+        product: TSMuxMenuKit
+        destinationFilters: [macOS]
       - target: TSMuxTunnel
     entitlements:
       path: App/TSMux.entitlements

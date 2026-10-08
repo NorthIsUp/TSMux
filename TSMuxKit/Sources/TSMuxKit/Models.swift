@@ -51,12 +51,12 @@ public struct Device: Decodable, Sendable, Identifiable, Hashable {
 
 public struct ProfilePrefs: Decodable, Sendable, Hashable {
   /// This tailnet's own on/off state, independent of the others.
-  public let connected: Bool
-  public let acceptRoutes: Bool
-  public let acceptDNS: Bool
-  public let shieldsUp: Bool
-  public let exitNode: String
-  public let exitNodeAllowLAN: Bool
+  public var connected: Bool
+  public var acceptRoutes: Bool
+  public var acceptDNS: Bool
+  public var shieldsUp: Bool
+  public var exitNode: String
+  public var exitNodeAllowLAN: Bool
 
   enum CodingKeys: String, CodingKey {
     case connected
@@ -121,7 +121,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
   public let connectedSince: String?
   public let healthMessages: [String]?
   public let adminURL: String?
-  public let prefs: ProfilePrefs?
+  public var prefs: ProfilePrefs?
   /// The one profile whose exit node public traffic uses; the same on every
   /// status, since a host has a single default route.
   public let exitProfile: String?
@@ -225,8 +225,8 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
     ProfileStatus(
       profile: p.name, displayName: p.displayName, state: "Stopped",
       selfName: nil, deviceName: p.hostname, ips: nil, peers: 0, authURL: nil,
-      suffixes: p.suffixes, httpProxy: "127.0.0.1:\(p.httpProxyPort)",
-      socks5Proxy: "127.0.0.1:\(p.socks5ProxyPort)", error: nil,
+      suffixes: p.suffixes, httpProxy: p.httpProxyPort == 0 ? nil : "127.0.0.1:\(p.httpProxyPort)",
+      socks5Proxy: p.socks5ProxyPort == 0 ? nil : "127.0.0.1:\(p.socks5ProxyPort)", error: nil,
       tailnet: nil, magicDNSSuffix: nil, suffixConflict: nil, user: nil,
       keyExpiry: nil, connectedSince: nil, healthMessages: nil, adminURL: nil, prefs: nil,
       exitProfile: nil, exitNodeOptions: nil, devices: nil, tailnetLock: nil)
@@ -291,6 +291,20 @@ public struct Profile: Decodable, Sendable, Identifiable {
     case ipRoutes = "ip_routes"
     case httpProxyPort = "http_proxy_port"
     case socks5ProxyPort = "socks5_proxy_port"
+  }
+
+  /// A tailnet known only by name, before anything has reported its config.
+  public init(name: String, displayName: String) {
+    self.name = name
+    self.displayName = displayName
+    hostname = ""
+    controlURL = ""
+    acceptRoutes = false
+    suffixes = nil
+    matchRoot = false
+    ipRoutes = nil
+    httpProxyPort = 0
+    socks5ProxyPort = 0
   }
 
   public var id: String { name }

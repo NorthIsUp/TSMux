@@ -1,5 +1,6 @@
 import Foundation
 import TSMuxKit
+import TSMuxMenuKit
 
 /// A node key cannot be renewed unattended — renewing it means signing in again
 /// in a browser — so the most a tool can do is make sure the deadline is never
@@ -11,10 +12,6 @@ import TSMuxKit
 /// written to ~/Library/LaunchAgents until the user turns it on, and turning it
 /// off removes the file.
 enum ExpiryWatch {
-  /// Days of notice. Matches the CLI's own default, so the menu and the weekly
-  /// notification agree about what "soon" means.
-  static let warnDays = 21
-
   static let label = "dev.northisup.tsmux.expiry"
 
   static var plistURL: URL {

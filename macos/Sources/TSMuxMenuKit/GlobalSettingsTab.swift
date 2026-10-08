@@ -12,17 +12,19 @@ struct GlobalSettingsTab: View {
   @State private var showCLI = false
   @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
   @State private var pacURL: String = ""
-  @State private var expiryWatchOn = ExpiryWatch.isInstalled
+  @State private var expiryWatchOn = false
 
   var body: some View {
     Form {
       general
-      networkRouting
+      if model.features.contains(.pacToggle) { networkRouting }
       window
-      Section("VPN On Demand") {
-        UnavailableRow(
-          title: "On Demand", note: Unavailable.vpnOnDemand,
-          control: AnyView(Button("Manage…") {}))
+      if !model.features.contains(.systemVPN) {
+        Section("VPN On Demand") {
+          UnavailableRow(
+            title: "On Demand", note: Unavailable.vpnOnDemand,
+            control: AnyView(Button("Manage…") {}))
+        }
       }
       exitNodes
       Section("Tailnet Lock") {
@@ -30,18 +32,22 @@ struct GlobalSettingsTab: View {
           title: "Tailnet Lock", note: Unavailable.tailnetLock,
           control: AnyView(Button("Manage…") {}))
       }
-      Section("Node keys") {
-        Toggle("Check key expiry weekly", isOn: expiryWatchBinding)
-        Text(
-          "A Tailscale node key expires 180 days after you sign in and cannot be renewed "
-            + "without signing in again. This installs a weekly LaunchAgent that notifies you "
-            + "\(ExpiryWatch.warnDays) days before one lapses. Turning it off removes the agent."
-        )
-        .font(.footnote).foregroundStyle(.secondary)
+      if model.features.contains(.expiryWatch) {
+        Section("Node keys") {
+          Toggle("Check key expiry weekly", isOn: expiryWatchBinding)
+          Text(
+            "A Tailscale node key expires 180 days after you sign in and cannot be renewed "
+              + "without signing in again. This installs a weekly LaunchAgent that notifies you "
+              + "\(Expiry.warnDays) days before one lapses. Turning it off removes the agent."
+          )
+          .font(.footnote).foregroundStyle(.secondary)
+        }
       }
-      Section("CLI integration") {
-        LabeledContent("Command line") {
-          Button("Show me how") { showCLI = true }
+      if model.features.contains(.cliIntegration) {
+        Section("CLI integration") {
+          LabeledContent("Command line") {
+            Button("Show me how") { showCLI = true }
+          }
         }
       }
       Section("About") {
@@ -53,7 +59,10 @@ struct GlobalSettingsTab: View {
     }
     .formStyle(.grouped)
     .sheet(isPresented: $showCLI) { CLIIntegrationSheet() }
-    .task { pacURL = CLI.pacURL() ?? "" }
+    .task {
+      expiryWatchOn = model.backend.expiryWatchInstalled
+      pacURL = await model.backend.pacURL() ?? ""
+    }
   }
 
   // MARK: general
@@ -107,7 +116,7 @@ struct GlobalSettingsTab: View {
       get: { expiryWatchOn },
       set: { on in
         model.expiryWatchEnabled = on
-        expiryWatchOn = ExpiryWatch.isInstalled
+        expiryWatchOn = model.backend.expiryWatchInstalled
       })
   }
 
@@ -116,7 +125,7 @@ struct GlobalSettingsTab: View {
       get: { model.pacApplied },
       set: { _ in
         model.togglePAC()
-        pacURL = CLI.pacURL() ?? ""
+        Task { pacURL = await model.backend.pacURL() ?? "" }
       })
   }
 
@@ -204,6 +213,7 @@ struct GlobalSettingsTab: View {
 }
 
 struct AboutTab: View {
+  let model: AppModel
   @State private var version = "…"
 
   var body: some View {
@@ -227,7 +237,7 @@ struct AboutTab: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .task {
-      if case .success(let v) = CLI.json(VersionInfo.self, ["version"]) {
+      if let v = await model.backend.version() {
         version = v.display
       } else {
         version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"

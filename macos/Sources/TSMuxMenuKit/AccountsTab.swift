@@ -259,9 +259,9 @@ struct AccountDetail: View {
   @ViewBuilder private var connection: some View {
     Section("Connection") {
       Toggle(
-        "Allow incoming connections", isOn: pref(\.shieldsUp, invert: true, flag: "shields-up"))
-      Toggle("Use Tailscale DNS", isOn: pref(\.acceptDNS, flag: "accept-dns"))
-      Toggle(isOn: pref(\.acceptRoutes, flag: "accept-routes")) {
+        "Allow incoming connections", isOn: pref(\.shieldsUp, invert: true, set: \.shieldsUp))
+      Toggle("Use Tailscale DNS", isOn: pref(\.acceptDNS, set: \.acceptDNS))
+      Toggle(isOn: pref(\.acceptRoutes, set: \.acceptRoutes)) {
         Text("Use Tailscale subnets")
         Text("Reach private IPs behind subnet routers on this tailnet, like 10.0.0.0/24.")
       }
@@ -279,7 +279,7 @@ struct AccountDetail: View {
         .font(.caption)
         .foregroundStyle(.secondary)
       }
-      Toggle("Allow local network access", isOn: pref(\.exitNodeAllowLAN, flag: "exit-node-lan"))
+      Toggle("Allow local network access", isOn: pref(\.exitNodeAllowLAN, set: \.exitNodeAllowLAN))
         .disabled(profile.prefs?.exitNode.isEmpty ?? true)
     }
     .disabled(profile.prefs == nil)
@@ -288,7 +288,8 @@ struct AccountDetail: View {
   /// Optimistic-then-authoritative: SwiftUI redraws from the returned Status,
   /// so a rejected write simply snaps back with the reason inline.
   private func pref(
-    _ key: KeyPath<ProfilePrefs, Bool>, invert: Bool = false, flag: String
+    _ key: KeyPath<ProfilePrefs, Bool>, invert: Bool = false,
+    set field: WritableKeyPath<PrefsChange, Bool?>
   ) -> Binding<Bool> {
     Binding(
       get: {
@@ -296,15 +297,20 @@ struct AccountDetail: View {
         return invert ? !p[keyPath: key] : p[keyPath: key]
       },
       set: { on in
-        let wire = invert ? !on : on
-        inlineError = model.setPrefs(profile.profile, ["--\(flag)=\(wire)"])
+        var change = PrefsChange(profile: profile.profile)
+        change[keyPath: field] = invert ? !on : on
+        Task { inlineError = await model.setPrefs(change) }
       })
   }
 
   private var exitNodeBinding: Binding<String> {
     Binding(
       get: { profile.prefs?.exitNode ?? "" },
-      set: { inlineError = model.setPrefs(profile.profile, ["--exit-node", $0]) })
+      set: { id in
+        var change = PrefsChange(profile: profile.profile)
+        change.exitNode = id
+        Task { inlineError = await model.setPrefs(change) }
+      })
   }
 
   // MARK: account
@@ -313,7 +319,7 @@ struct AccountDetail: View {
     Section("Account") {
       HStack {
         Button("Log Out", role: .destructive) {
-          inlineError = model.logout(profile.profile)
+          Task { inlineError = await model.logout(profile.profile) }
         }
         if let admin = profile.adminURL, !admin.isEmpty {
           Button("Admin Console…") { openURLString(admin) }
@@ -360,14 +366,16 @@ private struct MachineNameRow: View {
         } else {
           HStack(spacing: 6) {
             CopyableValue(value: profile.machineName ?? configured)
-            Button {
-              draft = configured
-              editing = true
-            } label: {
-              Image(systemName: "pencil")
+            if model.features.contains(.renameDevice) {
+              Button {
+                draft = configured
+                editing = true
+              } label: {
+                Image(systemName: "pencil")
+              }
+              .buttonStyle(.borderless)
+              .help("Rename this device")
             }
-            .buttonStyle(.borderless)
-            .help("Rename this device")
           }
         }
         if let error {
@@ -383,11 +391,9 @@ private struct MachineNameRow: View {
     let name = draft.trimmingCharacters(in: .whitespaces)
     let key = profile.profile
     Task {
-      let (_, err, code) = await model.mutateProfiles {
-        CLI.run(["profile", "set", key, "--hostname", name])
-      }
-      if code != 0 {
-        error = err.isEmpty ? "Rename failed." : err
+      let outcome = await model.mutateProfiles { backend in await backend.setHostname(key, name) }
+      if case .failure(let e) = outcome {
+        error = e.message.isEmpty ? "Rename failed." : e.message
         return
       }
       error = nil
