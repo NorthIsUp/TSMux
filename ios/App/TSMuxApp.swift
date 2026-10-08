@@ -6,11 +6,40 @@ struct TSMuxApp: App {
   @State private var model = TunnelModel()
 
   var body: some Scene {
-    WindowGroup {
-      ContentView().environment(model)
-    }
+    #if os(macOS)
+      MenuBarExtra {
+        ContentView().environment(model).frame(width: 380, height: 560)
+      } label: {
+        MenuBarLabel().environment(model)
+      }
+      .menuBarExtraStyle(.window)
+    #else
+      WindowGroup {
+        ContentView().environment(model)
+      }
+    #endif
   }
 }
+
+#if os(macOS)
+  /// The panel's content only exists while it is open, so the mark loads and
+  /// polls the tunnel itself to keep its count right.
+  struct MenuBarLabel: View {
+    @Environment(TunnelModel.self) private var model
+
+    var body: some View {
+      let up = model.tailnets.filter { $0.condition == .running }.count
+      Image(nsImage: MenuBarMark.image(lit: CGFloat(up), total: model.tailnets.count))
+        .task { await model.load() }
+        .task(id: model.isConnected) {
+          while model.isConnected && !Task.isCancelled {
+            await model.refresh()
+            try? await Task.sleep(for: .seconds(10))
+          }
+        }
+    }
+  }
+#endif
 
 struct ContentView: View {
   @Environment(TunnelModel.self) private var model
@@ -75,6 +104,12 @@ struct ContentView: View {
         } footer: {
           Text("TSMux \(Project.version) · MIT licensed")
         }
+
+        #if os(macOS)
+          Section {
+            Button("Quit TSMux", systemImage: "power") { NSApplication.shared.terminate(nil) }
+          }
+        #endif
       }
       .navigationTitle("TSMux")
       .navigationDestination(for: String.self) { TailnetView(profile: $0) }

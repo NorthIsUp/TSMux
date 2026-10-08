@@ -12,3 +12,4 @@ ios/build/
 TSMuxShell/.build/
 TSMuxShell/TSMuxSSH.xcframework/
 __pycache__/
+ios/.build-mac/

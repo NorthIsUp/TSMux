@@ -1,6 +1,5 @@
 import SwiftUI
 import TSMuxKit
-import UIKit
 
 struct TailnetView: View {
   let profile: String
@@ -142,7 +141,7 @@ struct TailnetView: View {
           .font(.system(.footnote, design: .monospaced))
           .textSelection(.enabled)
         Spacer()
-        Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = value }
+        Button("Copy", systemImage: "doc.on.doc") { Pasteboard.copy(value) }
           .labelStyle(.iconOnly)
           .buttonStyle(.borderless)
       }

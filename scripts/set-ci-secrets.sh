@@ -19,7 +19,7 @@ key="$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
 
 sparkle_key="${SPARKLE_KEY:-$HOME/.appstoreconnect/tsmux/sparkle_ed_priv}"
 
-for f in "$key" "$team_dir/devid.p12" "$team_dir/p12.pass" "$sparkle_key"; do
+for f in "$key" "$team_dir/devid.p12" "$team_dir/installer.p12" "$team_dir/p12.pass" "$sparkle_key"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 
@@ -27,6 +27,8 @@ echo "==> setting secrets on $repo"
 gh secret set ASC_KEY_P8    --repo "$repo" < "$key"
 gh secret set P12_PASSWORD  --repo "$repo" < "$team_dir/p12.pass"
 base64 -i "$team_dir/devid.p12" | gh secret set DEVID_P12 --repo "$repo"
+# Signs the Mac App Store .pkg; same password as the Developer ID p12.
+base64 -i "$team_dir/installer.p12" | gh secret set INSTALLER_P12 --repo "$repo"
 # Signs every Sparkle update. Losing it means shipping a new public key in a
 # build users have to install by hand; leaking it means someone else can.
 gh secret set SPARKLE_ED_KEY --repo "$repo" < "$sparkle_key"
@@ -38,7 +40,8 @@ op_account="${OP_ACCOUNT:-mony-hitchcock}"
 op_item="${OP_ITEM:-hoo5lzo6l6sotm77acfcnojg5q}"
 op_p12_file="${OP_P12_FILE:-cyhrdaeqyz22dm2yfndqlwst7i}"
 ios_dir="${IOS_DIR:-$HOME/.appstoreconnect/tsmux}"
-for f in "$ios_dir/app.mobileprovision" "$ios_dir/tunnel.mobileprovision"; do
+for f in "$ios_dir/app.mobileprovision" "$ios_dir/tunnel.mobileprovision" \
+  "$ios_dir/mac-app.provisionprofile" "$ios_dir/mac-tunnel.provisionprofile"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 tmp=$(mktemp -d)
@@ -51,6 +54,8 @@ jq -er '.fields[] | select(.label == "Distribution p12 password") | .value' "$tm
 base64 -i "$tmp/dist.p12" | gh secret set DIST_P12_BASE64 --repo "$repo"
 base64 -i "$ios_dir/app.mobileprovision" | gh secret set APP_PROFILE_BASE64 --repo "$repo"
 base64 -i "$ios_dir/tunnel.mobileprovision" | gh secret set TUNNEL_PROFILE_BASE64 --repo "$repo"
+base64 -i "$ios_dir/mac-app.provisionprofile" | gh secret set MAC_APP_PROFILE_BASE64 --repo "$repo"
+base64 -i "$ios_dir/mac-tunnel.provisionprofile" | gh secret set MAC_TUNNEL_PROFILE_BASE64 --repo "$repo"
 
 # The daily tailscale-update job opens its PR with this. GITHUB_TOKEN cannot be
 # used: a PR it opens does not trigger `on: pull_request`, so ci.yml would never

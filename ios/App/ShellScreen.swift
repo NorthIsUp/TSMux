@@ -10,6 +10,6 @@ struct ShellScreen: View {
     ShellView(target: target)
       .ignoresSafeArea(.container, edges: .bottom)
       .navigationTitle(String(target.device.split(separator: ".").first ?? ""))
-      .navigationBarTitleDisplayMode(.inline)
+      .inlineTitle()
   }
 }

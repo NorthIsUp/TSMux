@@ -20,6 +20,7 @@ final class TunnelModel {
 
   private var manager: NETunnelProviderManager?
   private var observer: (any NSObjectProtocol)?
+  private var loadStarted = false
   private var scheduledExpiries: [String: Date] = [:]
 
   var isConnected: Bool { vpnStatus == .connected }
@@ -41,6 +42,9 @@ final class TunnelModel {
   func tailnet(_ profile: String) -> ProfileStatus? { tailnets.first { $0.profile == profile } }
 
   func load() async {
+    // The Mac menu bar mark and panel both load; one observer is enough.
+    guard !loadStarted else { return }
+    loadStarted = true
     manager = try? await NETunnelProviderManager.loadAllFromPreferences().first
     observer = NotificationCenter.default.addObserver(
       forName: .NEVPNStatusDidChange, object: nil, queue: .main

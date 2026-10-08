@@ -34,7 +34,7 @@ struct AddTailnetView: View {
         }
       }
       .navigationTitle("Add a tailnet")
-      .navigationBarTitleDisplayMode(.inline)
+      .inlineTitle()
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
           Button("Cancel") {
@@ -93,8 +93,7 @@ struct AddTailnetView: View {
     Form {
       Section {
         TextField("https://headscale.example.com", text: $controlURL)
-          .textInputAutocapitalization(.never)
-          .keyboardType(.URL)
+          .urlEntry()
           .autocorrectionDisabled()
       } header: {
         Text("Control server")
@@ -139,7 +138,7 @@ struct AddTailnetView: View {
     let t = model.tailnet(key)
     return Form {
       Section {
-        TextField("Name", text: $name).textInputAutocapitalization(.words)
+        TextField("Name", text: $name).nameEntry()
       } header: {
         Text("Name")
       } footer: {

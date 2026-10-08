@@ -1,11 +1,13 @@
 #!/bin/sh
-# Archive, sign and export TSMux for iOS, then upload it to TestFlight, on a build Mac or in CI.
+# Archive, sign and export TSMux for iOS or macOS, then upload it to TestFlight, on a build Mac
+# or in CI. Both platforms are the same App Store app (dev.northisup.tsmux).
 # From template-apple's testflight.sh, with a second profile for the tunnel extension.
-# usage: ios-testflight.sh [--no-upload]
+# usage: [PLATFORM=macos] ios-testflight.sh [--no-upload]
 #   --no-upload: export the .ipa (+ AppStoreInfo.plist for Linux Transporter) and stop. CI uses this
 #   and uploads from Linux.
 # env (none are secret): ASC_KEY_ID (238ATU74S4), ASC_ISSUER_ID
-#   optional: CI_KEYCHAIN (ci.keychain-db), INTERNAL_ONLY (1), OUT (build/testflight)
+#   optional: PLATFORM (ios|macos), CI_KEYCHAIN (ci.keychain-db), INTERNAL_ONLY (1),
+#   OUT (build/testflight, or build/testflight-macos)
 # Signing is manual: the Apple Distribution identity and both "TSMux … App Store" profiles must
 # already be installed (CI: ci-keychain.sh; locally: the login keychain and Xcode's profiles dir).
 set -eu
@@ -17,7 +19,13 @@ cd "$(dirname "$0")/../ios"
 SCHEME=TSMux BUNDLE_ID=dev.northisup.tsmux TEAM_ID=4BJBDQVY6M
 KC=${CI_KEYCHAIN:-ci.keychain-db}
 PASSFILE=$HOME/.appstoreconnect/${KC%.keychain-db}.pass
-OUT=${OUT:-build/testflight}
+PLATFORM=${PLATFORM:-ios}
+case $PLATFORM in
+  ios) DEST=iOS PROFILE="TSMux App Store" TUNNEL_PROFILE="TSMux Tunnel App Store" ;;
+  macos) DEST=macOS PROFILE="TSMux Mac App Store" TUNNEL_PROFILE="TSMux Tunnel Mac App Store" ;;
+  *) echo "PLATFORM must be ios or macos" >&2; exit 1 ;;
+esac
+OUT=${OUT:-build/testflight$([ "$PLATFORM" = ios ] || echo "-$PLATFORM")}
 # Internal-only builds skip Beta App Review and can never be offered to external testers.
 INTERNAL=$([ "${INTERNAL_ONLY:-1}" = 1 ] && echo true || echo false)
 
@@ -27,7 +35,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 
 # A UTC timestamp build number never collides with an earlier upload, from any machine.
 xcodebuild -project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release \
-  -destination generic/platform=iOS -archivePath "$OUT/$SCHEME.xcarchive" \
+  -destination "generic/platform=$DEST" -archivePath "$OUT/$SCHEME.xcarchive" \
   MARKETING_VERSION="$(tr -d '[:space:]' < ../VERSION)" \
   CURRENT_PROJECT_VERSION="$(date -u +%Y%m%d%H%M)" archive -quiet
 
@@ -43,9 +51,10 @@ cat > "$OUT/export.plist" <<EOF
   <key>teamID</key><string>$TEAM_ID</string>
   <key>signingStyle</key><string>manual</string>
   <key>signingCertificate</key><string>Apple Distribution</string>
+  <key>installerSigningCertificate</key><string>3rd Party Mac Developer Installer</string>
   <key>provisioningProfiles</key><dict>
-    <key>$BUNDLE_ID</key><string>TSMux App Store</string>
-    <key>$BUNDLE_ID.tunnel</key><string>TSMux Tunnel App Store</string>
+    <key>$BUNDLE_ID</key><string>$PROFILE</string>
+    <key>$BUNDLE_ID.tunnel</key><string>$TUNNEL_PROFILE</string>
   </dict>
 </dict></plist>
 EOF
@@ -54,4 +63,5 @@ PATH=/usr/bin:$PATH xcodebuild -exportArchive -archivePath "$OUT/$SCHEME.xcarchi
   -exportOptionsPlist "$OUT/export.plist" -exportPath "$OUT"
 
 [ -n "$UPLOAD" ] || exit 0
-xcrun altool --upload-app -t ios -f "$OUT/$SCHEME.ipa" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+EXT=$([ "$PLATFORM" = ios ] && echo ipa || echo pkg)
+xcrun altool --upload-app -t "$PLATFORM" -f "$OUT/$SCHEME.$EXT" --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"

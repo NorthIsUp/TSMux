@@ -3,6 +3,7 @@ name: TSMux
 options:
   deploymentTarget:
     iOS: "26.0"
+    macOS: "26.0"
 settings:
   base:
     DEVELOPMENT_TEAM: 4BJBDQVY6M
@@ -24,9 +25,11 @@ schemes:
       targets:
         - package: TSMuxKit/TSMuxKitTests
 targets:
+  # One app record for both platforms: on macOS it is the App Store menu bar
+  # app (the DMG app in ../macos is the separate CLI edition).
   TSMux:
     type: application
-    platform: iOS
+    supportedDestinations: [iOS, macOS]
     sources: [App]
     dependencies:
       - package: TSMuxKit
@@ -51,15 +54,23 @@ targets:
         # WireGuard is standard crypto and builds go to internal TestFlight only; without
         # this every build waits on the compliance question. Revisit before a public release.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        "INFOPLIST_KEY_LSUIElement[sdk=macosx*]": YES
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": App/TSMux-macOS.entitlements
+        # No Xcode account on the build Macs, so macOS signs manually even in Debug.
+        "CODE_SIGN_STYLE[sdk=macosx*]": Manual
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Development
+        "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": TSMux Mac Dev
       # A sibling of base: automatic Release signing fails headless.
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
+          "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Distribution
           PROVISIONING_PROFILE_SPECIFIER: TSMux App Store
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": TSMux Mac App Store
   TSMuxTunnel:
     type: app-extension
-    platform: iOS
+    supportedDestinations: [iOS, macOS]
     sources: [Tunnel]
     dependencies:
       - package: TSMuxKit
@@ -84,8 +95,14 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.northisup.tsmux.tunnel
         TARGETED_DEVICE_FAMILY: "1,2"
+        "CODE_SIGN_ENTITLEMENTS[sdk=macosx*]": Tunnel/TSMuxTunnel-macOS.entitlements
+        "CODE_SIGN_STYLE[sdk=macosx*]": Manual
+        "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Development
+        "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": TSMux Tunnel Mac Dev
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: Apple Distribution
+          "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Distribution
           PROVISIONING_PROFILE_SPECIFIER: TSMux Tunnel App Store
+          "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": TSMux Tunnel Mac App Store
