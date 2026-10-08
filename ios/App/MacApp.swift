@@ -70,16 +70,10 @@
     }
 
     /// The first start shows the system's "Add VPN Configurations" prompt,
-    /// which takes focus from this accessory app and doesn't hand it back, so
-    /// Settings and the add sheet in it end up behind whatever was in front.
+    /// which takes focus and leaves Settings behind whatever was in front.
     private func startTunnel() async throws {
       let prompts = tunnel.vpnStatus == .invalid
-      defer {
-        if prompts {
-          NSApp.activate()
-          NSApp.windows.first { $0.isVisible && $0.canBecomeKey }?.makeKeyAndOrderFront(nil)
-        }
-      }
+      defer { if prompts { SettingsScene.raise() } }
       try await tunnel.start()
     }
 
