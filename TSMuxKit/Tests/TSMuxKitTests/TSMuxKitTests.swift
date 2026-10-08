@@ -147,9 +147,9 @@ import Testing
   }
 
   @Test func suggestsNameFromSignIn() {
-    #expect(Slug.suggestedName(tailnet: "askclara.com", magicDNSSuffix: nil) == "Askclara")
-    #expect(Slug.suggestedName(tailnet: "adam@gmail.com", magicDNSSuffix: nil) == "Adam")
-    #expect(Slug.suggestedName(tailnet: "", magicDNSSuffix: "tail1234.ts.net") == "Tail1234")
+    #expect(Slug.suggestedName(tailnet: "askclara.com", magicDNSSuffix: nil) == "askclara.com")
+    #expect(Slug.suggestedName(tailnet: "adam@gmail.com", magicDNSSuffix: nil) == "adam@gmail.com")
+    #expect(Slug.suggestedName(tailnet: "", magicDNSSuffix: "tail1234.ts.net") == "tail1234.ts.net")
     #expect(Slug.suggestedName(tailnet: nil, magicDNSSuffix: nil) == "")
   }
 }
@@ -167,13 +167,13 @@ import Testing
     #expect(AddFlow.step(link) == .signIn(URL(string: "https://login.example/a")!))
     #expect(AddFlow.step(try status("NeedsMachineAuth")) == .needsApproval(admin: nil))
     let up = try status("Running", extra: #","tailnet":"askclara.com""#)
-    #expect(AddFlow.step(up) == .signedIn(suggestedName: "Askclara"))
+    #expect(AddFlow.step(up) == .signedIn(suggestedName: "askclara.com"))
     let locked = try status(
       "Running",
       extra:
         #","tailnet":"askclara.com","tailnet_lock":{"enabled":true,"signed":false,"locked_out":true}"#
     )
-    #expect(AddFlow.step(locked) == .signedIn(suggestedName: "Askclara"))
+    #expect(AddFlow.step(locked) == .signedIn(suggestedName: "askclara.com"))
   }
 
   @Test func opensEachLinkOnce() {
