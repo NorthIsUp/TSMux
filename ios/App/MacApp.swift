@@ -78,11 +78,15 @@
     }
 
     /// A Developer ID build's tunnel is a system extension that has to be
-    /// installed, and approved the first time, before it can start.
+    /// installed, and approved the first time, before it can start. The
+    /// first start also shows the system's "Add VPN Configurations" prompt,
+    /// which takes focus and leaves Settings behind whatever was in front.
     private func startTunnel() async throws {
       #if DIRECT
         try await SystemExtension.shared.activate()
       #endif
+      let prompts = tunnel.vpnStatus == .invalid
+      defer { if prompts { SettingsScene.raise() } }
       try await tunnel.start()
     }
 
