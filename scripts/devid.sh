@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Sign bin/TSMux.app with Developer ID, notarize and staple it, then build a
-# notarized .dmg — so a download from GitHub opens without Gatekeeper refusing it
-# and without the user clearing a quarantine flag by hand.
+# Notarize and staple bin/TSMux.app, then build a notarized .dmg — so a
+# download from GitHub opens without Gatekeeper refusing it and without the
+# user clearing a quarantine flag by hand.
 #
-# Developer ID needs no provisioning profile, no registered bundle id and no app
-# record: the certificate is per team, so this signs any app from 4BJBDQVY6M.
 # Run after scripts/build-app.sh.
 # usage: devid.sh [--sign-only] [app]
-#   --sign-only: sign and verify, then stop. PRs use it to prove signing without
-#   waiting on notarization.
+#   --sign-only: verify the signature, then stop. PRs use it to prove signing
+#   without waiting on notarization.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,23 +31,13 @@ notarize() {
     --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID"
 }
 
-# Nested code is not covered by a signature made over the bundle before it, so
-# it signs first — and Sparkle's helpers before the framework that contains
-# them. Notarization rejects the bundle otherwise.
-echo "==> signing (Developer ID, hardened runtime)"
-SPK="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
-for inner in \
-  "$SPK/XPCServices/Downloader.xpc" \
-  "$SPK/XPCServices/Installer.xpc" \
-  "$SPK/Updater.app" \
-  "$SPK/Autoupdate" \
-  "$APP/Contents/Frameworks/Sparkle.framework" \
-  "$APP/Contents/Resources/tsmux"
-do
-  codesign --force --timestamp --options runtime --sign "$DEVID" "$inner"
-done
-codesign --force --timestamp --options runtime --sign "$DEVID" "$APP"
+# scripts/build-app.sh exported the app already signed: Xcode signs the system
+# extension, Sparkle and the CLI with their own entitlements and profiles, and
+# signing again here would strip them.
+echo "==> checking the Developer ID signature"
 codesign --verify --deep --strict "$APP"
+codesign -dvv "$APP" 2>&1 | grep -q "^Authority=Developer ID Application" ||
+  { echo "$APP is not Developer ID signed" >&2; exit 1; }
 [ -z "$SIGN_ONLY" ] || { echo "signed $APP (not notarized)"; exit 0; }
 
 # notarytool takes an archive; stapler writes the ticket into the .app. So the

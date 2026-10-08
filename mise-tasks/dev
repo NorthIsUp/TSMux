@@ -1,30 +1,20 @@
 #!/usr/bin/env bash
-#MISE description="Rebuild TSMux.app and relaunch it on every source change"
-#MISE sources=["main.go", "internal/**/*.go", "macos/Sources/**/*.swift", "macos/Package.swift", "scripts/build-app.sh"]
+#MISE description="Rebuild TSMux.app, install it in /Applications and relaunch it"
+#MISE sources=["main.go", "internal/**/*.go", "mobile/**/*.go", "macos/Sources/**/*.swift", "macos/Package.swift", "TSMuxKit/Sources/**/*.swift", "ios/App/**/*.swift", "ios/Direct/**/*.swift", "ios/Tunnel/**/*.swift", "ios/DirectTunnel/**/*.swift", "ios/project.yml", "scripts/build-app.sh"]
 set -euo pipefail
 
-APP="${TSMUX_APP:-bin/TSMux.app}"
+# macOS activates a system extension only from an app in /Applications, and
+# replaces a running one only when the version changes.
+DEST=/Applications/TSMux.app
+version="$(tr -d '[:space:]' < VERSION).$(date -u +%Y%m%d%H%M%S)"
+BUILD_VERSION="$version" ./scripts/build-app.sh >/dev/null
 
-# Shut down gracefully and WAIT. Killing the daemon mid-write is how a logged-in
-# profile comes back needing a login: signal it, then give it time to finish,
-# and only escalate if it genuinely hangs.
-wait_gone() { # pattern, seconds
-  local i=0
-  while pgrep -f "$1" >/dev/null 2>&1 && [ "$i" -lt "${2}0" ]; do sleep 0.1; i=$((i + 1)); done
-  ! pgrep -f "$1" >/dev/null 2>&1
-}
-
-if pgrep -f 'TSMux.app/Contents/MacOS' >/dev/null 2>&1; then
-  osascript -e 'tell application "TSMux" to quit' >/dev/null 2>&1 ||
-    pkill -TERM -f 'TSMux.app/Contents/MacOS' || true
-  wait_gone 'TSMux.app/Contents/MacOS' 10 || pkill -KILL -f 'TSMux.app/Contents/MacOS' || true
+if pgrep -f "$DEST/Contents/MacOS" >/dev/null 2>&1; then
+  osascript -e 'tell application id "dev.northisup.tsmux.menu" to quit' >/dev/null 2>&1 ||
+    pkill -TERM -f "$DEST/Contents/MacOS" || true
+  for _ in $(seq 50); do pgrep -f "$DEST/Contents/MacOS" >/dev/null || break; sleep 0.2; done
 fi
-
-if pgrep -f 'tsmux up' >/dev/null 2>&1; then
-  ./bin/tsmux down >/dev/null 2>&1 || pkill -TERM -f 'tsmux up' || true
-  wait_gone 'tsmux up' 15 || { echo "daemon did not exit; refusing to SIGKILL it" >&2; exit 1; }
-fi
-
-./scripts/build-app.sh "$APP" >/dev/null
-open "$APP"
-echo "rebuilt and relaunched $(date +%H:%M:%S)"
+rm -rf "$DEST"
+ditto bin/TSMux.app "$DEST"
+open "$DEST"
+echo "installed $version and relaunched $(date +%H:%M:%S)"

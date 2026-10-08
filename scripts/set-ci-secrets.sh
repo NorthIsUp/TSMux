@@ -41,7 +41,8 @@ op_item="${OP_ITEM:-hoo5lzo6l6sotm77acfcnojg5q}"
 op_p12_file="${OP_P12_FILE:-cyhrdaeqyz22dm2yfndqlwst7i}"
 ios_dir="${IOS_DIR:-$HOME/.appstoreconnect/tsmux}"
 for f in "$ios_dir/app.mobileprovision" "$ios_dir/tunnel.mobileprovision" \
-  "$ios_dir/mac-app.provisionprofile" "$ios_dir/mac-tunnel.provisionprofile"; do
+  "$ios_dir/mac-app.provisionprofile" "$ios_dir/mac-tunnel.provisionprofile" \
+  "$ios_dir/direct-app.provisionprofile" "$ios_dir/direct-tunnel.provisionprofile"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 tmp=$(mktemp -d)
@@ -56,6 +57,10 @@ base64 -i "$ios_dir/app.mobileprovision" | gh secret set APP_PROFILE_BASE64 --re
 base64 -i "$ios_dir/tunnel.mobileprovision" | gh secret set TUNNEL_PROFILE_BASE64 --repo "$repo"
 base64 -i "$ios_dir/mac-app.provisionprofile" | gh secret set MAC_APP_PROFILE_BASE64 --repo "$repo"
 base64 -i "$ios_dir/mac-tunnel.provisionprofile" | gh secret set MAC_TUNNEL_PROFILE_BASE64 --repo "$repo"
+# The Developer ID Mac app and its system extension: their entitlements need a
+# profile even outside the App Store.
+base64 -i "$ios_dir/direct-app.provisionprofile" | gh secret set DIRECT_APP_PROFILE_BASE64 --repo "$repo"
+base64 -i "$ios_dir/direct-tunnel.provisionprofile" | gh secret set DIRECT_TUNNEL_PROFILE_BASE64 --repo "$repo"
 
 # The daily tailscale-update job opens its PR with this. GITHUB_TOKEN cannot be
 # used: a PR it opens does not trigger `on: pull_request`, so ci.yml would never

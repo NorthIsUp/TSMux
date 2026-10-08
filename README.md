@@ -31,9 +31,11 @@ MIT licensed.
 ## Install
 
 [**TSMux.dmg**](https://github.com/NorthIsUp/tsmux/releases/latest/download/TSMux.dmg)
-is the whole app: the menu bar front end with the `tsmux` CLI bundled inside it,
-so the two are always the same build. It is signed with a Developer ID
+is the whole app: the menu bar front end, the network extension that runs the
+tailnets, and the `tsmux` CLI, all one build. It is signed with a Developer ID
 certificate and notarized by Apple, so it opens without a Gatekeeper warning.
+The first time it connects, macOS asks you to allow its network extension in
+System Settings → General → Login Items & Extensions.
 
 <a id="cli"></a>
 
@@ -98,9 +100,11 @@ eval "$(tsmux env)"                                    # this whole shell
 tsmux ssh admin@box.your-tailnet.ts.net                # ssh through the right tailnet
 ```
 
-The CLI ships inside the app bundle at
-`/Applications/TSMux.app/Contents/Resources/tsmux`. Symlink it onto your
-`PATH`, or install it on its own:
+The CLI ships inside the app; **Settings → CLI integration → Install** links
+it into `~/.local/bin`. While the app runs, the CLI works on the app's
+tailnets; adding, removing and renaming them stays in the app, and `up`,
+`down` and `pac apply` are for a daemon of the CLI's own. Install it on its own
+with:
 
 ```sh
 go install github.com/NorthIsUp/tsmux@latest
@@ -233,7 +237,7 @@ publishes nothing.
 ## Development
 
 ```sh
-mise run dev       # rebuild + relaunch the app on every source change
+mise run dev       # rebuild, install in /Applications and relaunch the app
 mise run test      # go test -race
 mise run lint      # gofmt + vet
 mise run hk:check  # everything CI runs

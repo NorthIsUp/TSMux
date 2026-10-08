@@ -41,6 +41,9 @@ type Config struct {
 	// exit is live tailnet state, not configuration: the daemon sets it from
 	// the nodes' prefs and it is never saved.
 	exit ExitRoute
+
+	// apiToken is set on a config read from the Mac app (app.go).
+	apiToken string
 }
 
 // ExitRoute names the profile whose exit node carries public traffic. A host
@@ -472,6 +475,9 @@ func expand(p string) string {
 }
 
 func (c *Config) Save(path string) error {
+	if c.FromApp() {
+		return ErrAppOwnsConfig
+	}
 	if path == "" {
 		path = c.path
 	}

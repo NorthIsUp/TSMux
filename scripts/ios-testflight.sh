@@ -32,6 +32,8 @@ INTERNAL=$([ "${INTERNAL_ONLY:-1}" = 1 ] && echo true || echo false)
 rm -rf "$OUT" && mkdir -p "$OUT"
 [ ! -f "$PASSFILE" ] || security unlock-keychain -p "$(cat "$PASSFILE")" "$KC"
 (cd .. && mise run ios:core && mise run ssh:lib && mise run ios:gen)
+# The Mac app bundles the CLI.
+[ "$PLATFORM" = ios ] || ../scripts/build-cli.sh
 
 # A UTC timestamp build number never collides with an earlier upload, from any machine.
 xcodebuild -project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release \

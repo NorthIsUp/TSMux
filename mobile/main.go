@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -38,6 +39,8 @@ var (
 	mgr      *tsmux.Manager
 	closeAll func()
 	cancel   context.CancelFunc
+	// apiToken guards the loopback API the Mac extension serves for the CLI.
+	apiToken string
 )
 
 func main() {}
@@ -138,6 +141,13 @@ func call(raw []byte) response {
 	defer mu.RUnlock()
 	if mgr == nil {
 		return errResponse(http.StatusServiceUnavailable, errors.New("tsmux is not running"))
+	}
+	if req.Path == "/cli" {
+		if apiToken == "" {
+			return errResponse(http.StatusNotFound, errors.New("no loopback API on this platform"))
+		}
+		b, _ := json.Marshal(tsmux.AppEndpoint{URL: "http://" + cfg.Router.PACListen, Token: apiToken})
+		return response{Code: http.StatusOK, Body: string(b)}
 	}
 	// guard() only admits loopback JSON requests with no Origin, which is
 	// exactly what this is; the extension is the only caller.
@@ -268,10 +278,21 @@ func up() error {
 			return err
 		}
 	}
-	// No PAC/API listener: the app reaches the API through TSMuxCall, and the
-	// tunnel hands iOS the PAC as script. On TCP loopback any other app could
-	// call it.
-	closer, err := tsmux.Serve(c, m, nil)
+	// The app reaches the API through TSMuxCall, and the tunnel hands the OS
+	// the PAC as script. Only the Mac serves it on loopback too, for the CLI
+	// bundled in the app; the token keeps other users and apps out.
+	var local http.Handler
+	if runtime.GOOS == "darwin" {
+		tok, err := tsmux.NewAPIToken()
+		if err != nil {
+			cancelCtx()
+			m.Close()
+			return err
+		}
+		apiToken = tok
+		local = c.LocalHandler(m, tok)
+	}
+	closer, err := tsmux.Serve(c, m, local)
 	if err != nil {
 		cancelCtx()
 		m.Close()

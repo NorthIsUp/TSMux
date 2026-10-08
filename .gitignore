@@ -13,3 +13,8 @@ TSMuxShell/.build/
 TSMuxShell/TSMuxSSH.xcframework/
 __pycache__/
 ios/.build-mac/
+ios/Direct/Info.plist
+ios/Direct/TSMuxDirect.entitlements
+ios/DirectTunnel/Info.plist
+ios/DirectTunnel/TSMuxDirectTunnel.entitlements
+ios/.build-direct/

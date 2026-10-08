@@ -145,26 +145,39 @@ struct DNSSheet: View {
 
 struct CLIIntegrationSheet: View {
   @Environment(\.dismiss) private var dismiss
+  @State private var installedAt = Self.linked
+  @State private var failure: String?
 
-  private static let command =
-    "ln -s /Applications/TSMux.app/Contents/Resources/tsmux /usr/local/bin/tsmux"
+  /// No admin prompt and no root-owned directory: ~/.local/bin is the
+  /// user's, and most shells' setups already put it on PATH.
+  private static let link = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent(".local/bin/tsmux")
+  private static let bundled = Bundle.main.url(forResource: "tsmux", withExtension: nil)
+  private static let sandboxed =
+    ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
 
-  private var installed: String? {
-    for p in ["/usr/local/bin/tsmux", "/opt/homebrew/bin/tsmux"]
-    where FileManager.default.isExecutableFile(atPath: p) {
-      return p
+  private static var command: String {
+    "mkdir -p ~/.local/bin && ln -sf '\(bundled?.path ?? "")' ~/.local/bin/tsmux"
+  }
+
+  private static var linked: String? {
+    ([link.path, "/usr/local/bin/tsmux", "/opt/homebrew/bin/tsmux"]).first {
+      FileManager.default.isExecutableFile(atPath: $0)
     }
-    return nil
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
       Text("Use tsmux from the command line").font(.headline)
-      if let installed {
-        Label("Already installed at \(installed)", systemImage: "checkmark.circle.fill")
+      if let installedAt {
+        Label("Installed at \(installedAt)", systemImage: "checkmark.circle.fill")
           .foregroundStyle(.green)
       }
-      Text("Run this in Terminal to link the copy bundled inside TSMux.app:")
+      Text(
+        Self.sandboxed
+          ? "Run this in Terminal to link the tsmux bundled inside TSMux:"
+          : "Links the tsmux bundled inside TSMux into ~/.local/bin. It is the same as running:"
+      )
       HStack(alignment: .top, spacing: 8) {
         Text(Self.command)
           .font(.system(.caption, design: .monospaced))
@@ -174,13 +187,46 @@ struct CLIIntegrationSheet: View {
       }
       .padding(10)
       .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.1)))
+      if let failure {
+        Text(failure).font(.caption).foregroundStyle(.red)
+      }
       Spacer()
       HStack {
         Spacer()
-        Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+        Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+        // A sandboxed app can't write outside its container, so the App Store
+        // build hands over the command instead; the sheet is otherwise the same.
+        if Self.sandboxed {
+          Button("Copy Command") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(Self.command, forType: .string)
+          }
+          .keyboardShortcut(.defaultAction)
+        } else {
+          Button("Install") { install() }
+            .keyboardShortcut(.defaultAction)
+            .disabled(Self.bundled == nil)
+        }
       }
     }
     .padding(20)
-    .frame(width: 460, height: 260)
+    .frame(width: 460, height: 280)
+  }
+
+  private func install() {
+    guard let bundled = Self.bundled else { return }
+    let fm = FileManager.default
+    do {
+      try fm.createDirectory(
+        at: Self.link.deletingLastPathComponent(), withIntermediateDirectories: true)
+      if (try? fm.destinationOfSymbolicLink(atPath: Self.link.path)) != nil {
+        try fm.removeItem(at: Self.link)
+      }
+      try fm.createSymbolicLink(at: Self.link, withDestinationURL: bundled)
+      installedAt = Self.link.path
+      failure = nil
+    } catch {
+      failure = error.localizedDescription
+    }
   }
 }

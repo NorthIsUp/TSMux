@@ -55,7 +55,26 @@ func root() *cobra.Command {
 	return c
 }
 
-func load() (*tsmux.Config, error) { return tsmux.Load(cfgPath) }
+// load prefers the Mac app's tailnets while the app is running and no
+// --config was given: they live in its network extension, not a file here.
+func load() (*tsmux.Config, error) {
+	if cfgPath == "" {
+		if cfg, err := tsmux.LoadFromApp(); err == nil {
+			return cfg, nil
+		}
+	}
+	return tsmux.Load(cfgPath)
+}
+
+// loadDaemon is load for commands that start or stop a daemon or point the
+// system proxy at it, none of which apply to the app's tailnets.
+func loadDaemon() (*tsmux.Config, error) {
+	cfg, err := load()
+	if err == nil && cfg.FromApp() {
+		return nil, errors.New("the TSMux app runs these tailnets; turn them on and off in the app")
+	}
+	return cfg, err
+}
 
 // loadOrDefault treats "no config file yet" as an empty config, so the GUI's
 // launch probe and the first `profile add` do not have to special-case it.
@@ -121,7 +140,7 @@ func cmdUp() *cobra.Command {
 		Use:   "up",
 		Short: "Start every tailnet profile, the router, and the PAC server",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := load()
+			cfg, err := loadDaemon()
 			if err != nil {
 				return err
 			}
@@ -176,7 +195,7 @@ func cmdDown() *cobra.Command {
 	return &cobra.Command{
 		Use: "down", Short: "Stop the running tsmux daemon",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg, err := load()
+			cfg, err := loadDaemon()
 			if err != nil {
 				return err
 			}
@@ -628,7 +647,7 @@ func cmdPAC() *cobra.Command {
 	c.AddCommand(&cobra.Command{
 		Use: "apply", Short: "Point the system proxy at the PAC file",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg, err := load()
+			cfg, err := loadDaemon()
 			if err != nil {
 				return err
 			}
