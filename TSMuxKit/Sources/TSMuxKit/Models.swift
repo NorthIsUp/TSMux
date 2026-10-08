@@ -368,19 +368,9 @@ public enum Slug {
     return key[..<dash] + "-\(n + 1)"
   }
 
-  /// A display name guessed from what sign-in reported: `askclara.com` →
-  /// `Askclara`, `adam@gmail.com` → `Adam`, else the MagicDNS label.
+  /// The tailnet's own name as sign-in reported it, else its MagicDNS suffix.
   public static func suggestedName(tailnet: String?, magicDNSSuffix: String?) -> String {
-    let source = [tailnet, magicDNSSuffix].compactMap { $0 }.first { !$0.isEmpty } ?? ""
-    var name = source
-    if let at = name.firstIndex(of: "@") {
-      name = String(name[..<at])
-    } else {
-      let labels = name.split(separator: ".")
-      if labels.count > 1 { name = String(labels[0]) }
-    }
-    guard let first = name.first else { return "" }
-    return first.uppercased() + name.dropFirst()
+    [tailnet, magicDNSSuffix].compactMap { $0 }.first { !$0.isEmpty } ?? ""
   }
 
   public static func selfCheck() -> Bool {

@@ -869,6 +869,14 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 			s.User = &StatusUser{LoginName: u.LoginName, DisplayName: u.DisplayName, AvatarURL: u.ProfilePicURL}
 		}
 	}
+	// Status has no user until the first netmap arrives, seconds after a start;
+	// the saved login profile has it straight away.
+	if s.User == nil && st.BackendState != "NeedsLogin" {
+		if cur, _, err := lc.ProfileStatus(ctx); err == nil && cur.UserProfile.LoginName != "" {
+			u := cur.UserProfile
+			s.User = &StatusUser{LoginName: u.LoginName, DisplayName: u.DisplayName, AvatarURL: u.ProfilePicURL}
+		}
+	}
 	for _, ps := range st.Peer {
 		d := Device{
 			Name:     strings.TrimSuffix(ps.DNSName, "."),
