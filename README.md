@@ -102,8 +102,8 @@ tsmux ssh admin@box.your-tailnet.ts.net                # ssh through the right t
 
 The CLI ships inside the app; **Settings → CLI integration → Install** links
 it into `~/.local/bin`. While the app runs, the CLI works on the app's
-tailnets; adding, removing and renaming them stays in the app, and `up`,
-`down` and `pac apply` are for a daemon of the CLI's own. Install it on its own
+tailnets, through the app; `up`, `down` and `pac apply` are for a daemon of the
+CLI's own. Install it on its own
 with:
 
 ```sh

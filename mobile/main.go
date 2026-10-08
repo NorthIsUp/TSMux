@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -283,14 +284,19 @@ func up() error {
 	// bundled in the app; the token keeps other users and apps out.
 	var local http.Handler
 	if runtime.GOOS == "darwin" {
-		tok, err := tsmux.NewAPIToken()
-		if err != nil {
-			cancelCtx()
-			m.Close()
-			return err
+		// One token for the extension's lifetime: every profile edit restarts
+		// the core, and a new token each time would leave the CLI holding a
+		// stale one until the app next republishes it.
+		if apiToken == "" {
+			tok, err := tsmux.NewAPIToken()
+			if err != nil {
+				cancelCtx()
+				m.Close()
+				return err
+			}
+			apiToken = tok
 		}
-		apiToken = tok
-		local = c.LocalHandler(m, tok)
+		local = localAPI(c, m)
 	}
 	closer, err := tsmux.Serve(c, m, local)
 	if err != nil {
@@ -300,6 +306,30 @@ func up() error {
 	}
 	cfg, mgr, closeAll, cancel = c, m, closer, cancelCtx
 	return nil
+}
+
+// localAPI is the daemon's local API plus the profile edits only this core
+// has. An edit restarts the core and closes this listener, but not the
+// connection the request came in on, so the reply still arrives.
+func localAPI(c *tsmux.Config, m *tsmux.Manager) http.Handler {
+	mux := http.NewServeMux()
+	edit := func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req, _ := json.Marshal(request{Method: http.MethodPost, Path: r.URL.Path, Body: string(body)})
+		resp := call(req)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.Code)
+		io.WriteString(w, resp.Body)
+	}
+	for _, p := range []string{"/profiles/add", "/profiles/remove", "/profiles/rename"} {
+		mux.Handle(p, tsmux.TokenGuarded(apiToken, edit))
+	}
+	mux.Handle("/", c.LocalHandler(m, apiToken))
+	return mux
 }
 
 // down stops whatever up started. Callers hold mu.

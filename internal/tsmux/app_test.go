@@ -3,6 +3,8 @@ package tsmux
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -51,5 +53,35 @@ func TestLoadFromApp(t *testing.T) {
 	}
 	if err := got.Save(filepath.Join(home, "config.yaml")); !errors.Is(err, ErrAppOwnsConfig) {
 		t.Fatalf("Save of the app's config = %v, want ErrAppOwnsConfig", err)
+	}
+}
+
+func TestEditInApp(t *testing.T) {
+	var got ProfileEdit
+	var path string
+	mux := http.NewServeMux()
+	mux.Handle("/profiles/", TokenGuarded("secret", func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &got)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warning": "control unreachable"})
+	}))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := Default()
+	c.Router.PACListen = srv.Listener.Addr().String()
+	c.apiToken = "secret"
+	warning, err := c.EditInApp("/profiles/rename", ProfileEdit{Name: "a", NewName: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "/profiles/rename" || got.Name != "a" || got.NewName != "b" || warning != "control unreachable" {
+		t.Fatalf("path %q, body %+v, warning %q", path, got, warning)
+	}
+
+	c.apiToken = "wrong"
+	if _, err := c.EditInApp("/profiles/remove", ProfileEdit{Name: "a"}); err == nil {
+		t.Fatal("EditInApp with a wrong token: want an error")
 	}
 }
