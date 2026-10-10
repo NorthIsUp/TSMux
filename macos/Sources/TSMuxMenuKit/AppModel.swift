@@ -412,6 +412,18 @@ public final class AppModel {
     }
   }
 
+  /// Errors come back inline, such as another tailnet already routing that address.
+  func setRoutedIP(_ profile: String, _ target: String, on: Bool) async -> String? {
+    switch await backend.setRoutedIP(profile, target, on: on) {
+    case .success(let fresh):
+      replace(fresh)
+      return nil
+    case .failure(let e):
+      refresh()
+      return e.message
+    }
+  }
+
   private func replace(_ fresh: ProfileStatus) {
     guard case .ok(var ps) = status else { return }
     if let i = ps.firstIndex(where: { $0.profile == fresh.profile }) {

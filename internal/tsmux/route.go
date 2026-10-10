@@ -47,7 +47,7 @@ func (c *Config) Route(hostport string) (*Match, error) {
 			return &Match{exit, "ip literal to " + exit.Name + " exit node"}, nil
 		}
 		if !c.Security.AllowIPLiterals {
-			return nil, fmt.Errorf("%s: IP literals are not routable; add it to a profile's ip_routes or set security.allow_ip_literals", host)
+			return nil, fmt.Errorf("%s: IP literals are not routable; turn on routing for that device (tsmux profile route-ip), add it to a profile's ip_routes, or set security.allow_ip_literals", host)
 		}
 		return c.fallback(host, "ip literal")
 	}
@@ -177,6 +177,9 @@ func (c *Config) ipRulesLocked() []ipRule {
 	for _, p := range c.sorted {
 		for _, r := range p.routes {
 			out = append(out, ipRule{r, p, "ip_route"})
+		}
+		for _, r := range p.routed {
+			out = append(out, ipRule{r, p, "routed_ip"})
 		}
 	}
 	for _, p := range c.sorted {

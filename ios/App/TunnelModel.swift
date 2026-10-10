@@ -204,6 +204,13 @@ final class TunnelModel {
     await refresh()
   }
 
+  func routeIP(_ profile: String, _ target: String, on: Bool) async {
+    await perform {
+      let fresh = try await send(.routeIP(profile, target, on: on)).decode(ProfileStatus.self)
+      if let i = tailnets.firstIndex(where: { $0.profile == fresh.profile }) { tailnets[i] = fresh }
+    }
+  }
+
   func logout(_ profile: String) async {
     await perform {
       _ = try await send(.logout(profile)).decode(ProfileStatus.self)

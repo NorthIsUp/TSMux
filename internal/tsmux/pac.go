@@ -163,6 +163,15 @@ func (c *Config) InProcessHandler(m *Manager) http.Handler {
 		st, err := m.Logout(r.Context(), req.Profile)
 		reply(w, st, err)
 	}, true))
+	mux.Handle("/route-ip", guard(func(w http.ResponseWriter, r *http.Request) {
+		var req RouteIPRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		st, err := m.SetRoutedIP(r.Context(), req.Profile, req.Target, req.On)
+		reply(w, st, err)
+	}, true))
 	return mux
 }
 

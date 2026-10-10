@@ -96,6 +96,7 @@ struct AccountDetail: View {
       }
       routing
       connection
+      routedIPs
       account
     }
     .formStyle(.grouped)
@@ -311,6 +312,55 @@ struct AccountDetail: View {
         change.exitNode = id
         Task { inlineError = await model.setPrefs(change) }
       })
+  }
+
+  // MARK: routed IPs
+
+  /// Off by default: a 100.x address is a different machine in each tailnet,
+  /// so routing one by IP is a choice made per device.
+  @ViewBuilder private var routedIPs: some View {
+    let services = profile.services ?? []
+    let devices = profile.devices ?? []
+    if !services.isEmpty || !devices.isEmpty {
+      Section {
+        ForEach(services) { s in
+          routeToggle(s.shortName, ips: s.ips, routed: s.routed, by: s.routedBy, target: s.name)
+        }
+        if !devices.isEmpty {
+          DisclosureGroup("Devices (\(devices.count))") {
+            ForEach(devices) { d in
+              routeToggle(d.shortName, ips: d.ips, routed: d.routed, by: d.routedBy, target: d.name)
+            }
+          }
+        }
+      } header: {
+        Text("Route IP Addresses")
+      } footer: {
+        Text(
+          "Sends a device's or service's tailnet address, like https://100.x.y.z, to this tailnet."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private func routeToggle(
+    _ name: String, ips: [String]?, routed: Bool?, by other: String?, target: String
+  ) -> some View {
+    let on = routed == true
+    return Toggle(
+      isOn: Binding(
+        get: { on },
+        set: { v in
+          Task { inlineError = await model.setRoutedIP(profile.profile, target, on: v) }
+        })
+    ) {
+      Text(name)
+      Text(other.map { "already routed to \($0)" } ?? ips?.first ?? "")
+    }
+    .disabled(!on && other != nil)
+    .help(other.map { "\(ips?.first ?? name) is routed to \($0); turn it off there first." } ?? "")
   }
 
   // MARK: account

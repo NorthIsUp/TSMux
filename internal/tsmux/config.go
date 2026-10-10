@@ -121,15 +121,29 @@ type Profile struct {
 	Suffixes     []string `yaml:"suffixes" json:"suffixes"`
 	MatchRoot    bool     `yaml:"match_root" json:"match_root"`
 	IPRoutes     []string `yaml:"ip_routes" json:"ip_routes"`
-	HTTPPort     int      `yaml:"http_proxy_port" json:"http_proxy_port"`
-	SOCKSPort    int      `yaml:"socks5_proxy_port" json:"socks5_proxy_port"`
+	// RoutedIPs are peers and Tailscale Services the user chose to route by
+	// address. Opt-in per peer, not a 100.64.0.0/10 route: every tailnet
+	// allocates from that range, so the same address is a different machine
+	// in each one.
+	RoutedIPs []RoutedIP `yaml:"routed_ips,omitempty" json:"routed_ips"`
+	HTTPPort  int        `yaml:"http_proxy_port" json:"http_proxy_port"`
+	SOCKSPort int        `yaml:"socks5_proxy_port" json:"socks5_proxy_port"`
 
 	routes []netip.Prefix
+	// routed is RoutedIPs parsed, guarded by Config.mu.
+	routed []netip.Prefix
 
 	// Split-DNS domains and subnet routes the running node learned from its
 	// netmap. In memory only, guarded by Config.mu.
 	learnedSuffixes []string
 	learnedRoutes   []netip.Prefix
+}
+
+// RoutedIP is one peer's or service's addresses, kept with its name so the
+// entry still reads sensibly once the peer is gone.
+type RoutedIP struct {
+	Name string   `yaml:"name" json:"name"`
+	IPs  []string `yaml:"ips" json:"ips"`
 }
 
 // Fallback is the profile used when nothing matches and cross-profile
@@ -367,6 +381,14 @@ func (c *Config) Normalize() error {
 			}
 			p.routes = append(p.routes, pfx)
 		}
+		if p.RoutedIPs == nil {
+			p.RoutedIPs = []RoutedIP{}
+		}
+		routed, err := hostPrefixes(p.RoutedIPs)
+		if err != nil {
+			return fmt.Errorf("profile %q: %w", n, err)
+		}
+		p.routed = routed
 		c.sorted = append(c.sorted, p)
 	}
 

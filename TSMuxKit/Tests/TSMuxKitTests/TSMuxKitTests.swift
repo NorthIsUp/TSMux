@@ -16,6 +16,26 @@ import Testing
     #expect(s.devices?.count == 3)
   }
 
+  @Test func decodesRoutedIPs() throws {
+    let s = try #require(try fixture().first)
+    let byName = Dictionary(uniqueKeysWithValues: (s.devices ?? []).map { ($0.shortName, $0) })
+    #expect(byName["nas"]?.routed == true)
+    #expect(byName["laptop"]?.routedBy == "work")
+    #expect(byName["phone"]?.routed == nil)
+    let svc = try #require(s.services?.first)
+    #expect(svc.shortName == "romm")
+    #expect(svc.dnsName == "romm.example.ts.net")
+  }
+
+  @Test func routeIPBody() throws {
+    let req = try TunnelRequest.routeIP("home", "svc:romm", on: true)
+    #expect(req.path == "/route-ip")
+    let body =
+      try JSONSerialization.jsonObject(with: Data(try #require(req.body).utf8)) as? [String: Any]
+    #expect(body?["target"] as? String == "svc:romm")
+    #expect(body?["on"] as? Bool == true)
+  }
+
   @Test func deviceApprovalIsItsOwnCondition() throws {
     let json = #"{"profile":"work","display_name":"Work","state":"NeedsMachineAuth"}"#
     let s = try JSONDecoder().decode(ProfileStatus.self, from: Data(json.utf8))

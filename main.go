@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -517,7 +518,7 @@ func cmdProfile() *cobra.Command {
 	rename.Flags().StringVar(&renameDisplay, "display-name", "", "human-readable name for the GUI")
 	c.AddCommand(rename)
 
-	c.AddCommand(cmdProfileSet())
+	c.AddCommand(cmdProfileSet(), cmdProfileRouteIP())
 
 	c.AddCommand(&cobra.Command{
 		Use: "move <name> <position>", Short: "Reorder a profile; position 1 is the one a bare `tailscale` uses",
@@ -695,6 +696,69 @@ func cmdProfileSet() *cobra.Command {
 	c.Flags().StringSliceVar(&addSuffix, "add-suffix", nil, "also route this DNS suffix to this tailnet, e.g. .example.com")
 	c.Flags().StringSliceVar(&rmSuffix, "remove-suffix", nil, "stop routing this DNS suffix to this tailnet")
 	return c
+}
+
+func cmdProfileRouteIP() *cobra.Command {
+	return &cobra.Command{
+		Use:   "route-ip <name> [<device|service|ip> on|off]",
+		Short: "Route a device's or Tailscale Service's IP address to this profile, or list them",
+		Long: "IP literals route nowhere by default: every tailnet hands out 100.x addresses on its own,\n" +
+			"so one address can be a different machine in each. This turns routing on for one peer or\n" +
+			"service (e.g. svc:romm) at a time. With just the profile, lists them.",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) == 1 || len(args) == 3 && (args[2] == "on" || args[2] == "off") {
+				return nil
+			}
+			return errors.New("usage: tsmux profile route-ip <name> [<device|service|ip> on|off]")
+		},
+		RunE: func(_ *cobra.Command, args []string) error {
+			cfg, err := load()
+			if err != nil {
+				return err
+			}
+			if len(args) == 3 {
+				st, err := cfg.PostRouteIP(tsmux.RouteIPRequest{Profile: args[0], Target: args[1], On: args[2] == "on"})
+				if err != nil {
+					return err
+				}
+				emit(st.RoutedIPs, func() {
+					fmt.Printf("%s: routing %s %s\n", args[0], args[1], args[2])
+				})
+				return nil
+			}
+			all, err := cfg.FetchStatus()
+			if err != nil {
+				return err
+			}
+			i := slices.IndexFunc(all, func(s tsmux.Status) bool { return s.Profile == args[0] })
+			if i < 0 {
+				return fmt.Errorf("profile %q is not running", args[0])
+			}
+			st := all[i]
+			emit(map[string]any{"devices": st.Devices, "services": st.Services, "routed_ips": st.RoutedIPs}, func() {
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "NAME\tKIND\tADDRESSES\tROUTED")
+				row := func(name, kind string, ips []string, routed bool, by string) {
+					state := "off"
+					switch {
+					case routed:
+						state = "on"
+					case by != "":
+						state = "routed to " + by
+					}
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", name, kind, strings.Join(ips, " "), state)
+				}
+				for _, s := range st.Services {
+					row(s.Name, "service", s.IPs, s.Routed, s.RoutedBy)
+				}
+				for _, d := range st.Devices {
+					row(d.Name, "device", d.IPs, d.Routed, d.RoutedBy)
+				}
+				w.Flush()
+			})
+			return nil
+		},
+	}
 }
 
 // onlyConfigChanged reports whether every flag passed was config-level, in

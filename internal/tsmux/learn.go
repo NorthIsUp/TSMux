@@ -83,6 +83,25 @@ func learnFromNetmap(nm *netmap.NetworkMap, acceptDNS, acceptRoutes bool) (domai
 	return domains, routes
 }
 
+// servicesFromNetmap lists the Tailscale Services this node can reach, with
+// the MagicDNS name each one answers on.
+func servicesFromNetmap(nm *netmap.NetworkMap) []Service {
+	magic := strings.Trim(nm.MagicDNSSuffix(), ".")
+	var out []Service
+	for name, d := range nm.Services() {
+		s := Service{Name: string(name)}
+		if label := strings.TrimPrefix(string(name), "svc:"); magic != "" {
+			s.DNSName = label + "." + magic
+		}
+		for _, a := range d.Addrs {
+			s.IPs = append(s.IPs, a.String())
+		}
+		out = append(out, s)
+	}
+	slices.SortFunc(out, func(a, b Service) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
 // isDomain keeps the PAC to hostname characters: these keys come from the
 // control server, not the user, and are written into JavaScript.
 func isDomain(d string) bool {

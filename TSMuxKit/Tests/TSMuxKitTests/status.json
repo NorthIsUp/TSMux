@@ -43,7 +43,8 @@
     "tags": [
      "tag:server"
     ],
-    "online": true
+    "online": true,
+    "routed": true
    },
    {
     "name": "phone.example.ts.net",
@@ -63,7 +64,17 @@
     ],
     "os": "macOS",
     "owner": "user@example.com",
-    "online": true
+    "online": true,
+    "routed_by": "work"
+   }
+  ],
+  "services": [
+   {
+    "name": "svc:romm",
+    "dns_name": "romm.example.ts.net",
+    "ips": [
+     "100.90.45.67"
+    ]
    }
   ]
  }

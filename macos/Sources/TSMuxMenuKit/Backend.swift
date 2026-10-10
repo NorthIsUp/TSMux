@@ -33,6 +33,9 @@ public protocol Backend: AnyObject {
   func profileList() -> Result<[Profile], CLIError>
   func setPrefs(_ change: PrefsChange) async -> Result<ProfileStatus, CLIError>
   func logout(_ profile: String) async -> Result<ProfileStatus, CLIError>
+  /// `target` is a device's or service's name or address.
+  func setRoutedIP(_ profile: String, _ target: String, on: Bool) async
+    -> Result<ProfileStatus, CLIError>
   func addProfile(_ key: String, displayName: String, controlURL: String?, matchRoot: Bool) async
     -> Result<Void, CLIError>
   func renameProfile(_ key: String, to newKey: String, displayName: String) async

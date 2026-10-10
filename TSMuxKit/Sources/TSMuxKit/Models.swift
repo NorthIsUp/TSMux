@@ -24,13 +24,16 @@ public struct Device: Decodable, Sendable, Identifiable, Hashable {
   /// Host keys the device's Tailscale SSH server advertises; an SSH client
   /// pins these rather than asking the user to trust a fingerprint.
   public let sshHostKeys: [String]?
+  public let routed: Bool?
+  public let routedBy: String?
 
   public var id: String { name }
 
   enum CodingKeys: String, CodingKey {
-    case name, hostname, ips, os, owner, tags, online
+    case name, hostname, ips, os, owner, tags, online, routed
     case exitNode = "exit_node"
     case sshHostKeys = "ssh_host_keys"
+    case routedBy = "routed_by"
   }
 
   /// What a plain click copies: something you can paste into a browser.
@@ -46,6 +49,26 @@ public struct Device: Decodable, Sendable, Identifiable, Hashable {
     if let t = tags?.first, !t.isEmpty { return t }
     if let o = owner, !o.isEmpty { return o }
     return "Other"
+  }
+}
+
+/// A Tailscale Service the tailnet offers, such as `svc:romm`.
+public struct Service: Decodable, Sendable, Identifiable, Hashable {
+  public let name: String
+  public let dnsName: String?
+  public let ips: [String]?
+  public let routed: Bool?
+  /// Another tailnet that already routes this address, which is why it can't
+  /// be turned on here.
+  public let routedBy: String?
+
+  public var id: String { name }
+  public var shortName: String { name.hasPrefix("svc:") ? String(name.dropFirst(4)) : name }
+
+  enum CodingKeys: String, CodingKey {
+    case name, ips, routed
+    case dnsName = "dns_name"
+    case routedBy = "routed_by"
   }
 }
 
@@ -127,6 +150,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
   public let exitProfile: String?
   public let exitNodeOptions: [ExitNodeOption]?
   public let devices: [Device]?
+  public let services: [Service]?
   public let tailnetLock: TailnetLock?
 
   enum CodingKeys: String, CodingKey {
@@ -153,7 +177,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
     case prefs
     case exitProfile = "exit_profile"
     case exitNodeOptions = "exit_node_options"
-    case devices
+    case devices, services
     case tailnetLock = "tailnet_lock"
   }
 
@@ -229,7 +253,7 @@ public struct ProfileStatus: Decodable, Sendable, Identifiable {
       socks5Proxy: p.socks5ProxyPort == 0 ? nil : "127.0.0.1:\(p.socks5ProxyPort)", error: nil,
       tailnet: nil, magicDNSSuffix: nil, suffixConflict: nil, user: nil,
       keyExpiry: nil, connectedSince: nil, healthMessages: nil, adminURL: nil, prefs: nil,
-      exitProfile: nil, exitNodeOptions: nil, devices: nil, tailnetLock: nil)
+      exitProfile: nil, exitNodeOptions: nil, devices: nil, services: nil, tailnetLock: nil)
   }
 
   /// `self` keeps the wire's trailing dot; nothing user-facing wants it.

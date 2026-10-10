@@ -163,6 +163,14 @@
       await call { try await self.tunnel.send(.logout(profile)).decode(ProfileStatus.self) }
     }
 
+    func setRoutedIP(_ profile: String, _ target: String, on: Bool) async
+      -> Result<ProfileStatus, CLIError>
+    {
+      await call {
+        try await self.tunnel.send(.routeIP(profile, target, on: on)).decode(ProfileStatus.self)
+      }
+    }
+
     /// Turns the VPN on first: the tunnel is what holds the config.
     func addProfile(_ key: String, displayName: String, controlURL: String?, matchRoot: Bool)
       async -> Result<Void, CLIError>
