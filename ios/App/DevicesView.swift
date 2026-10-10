@@ -68,7 +68,7 @@ struct DevicesView: View {
 
 /// "Route this IP address": off by default, since a 100.x address is a
 /// different machine in each tailnet.
-struct RouteSwitch {
+@MainActor struct RouteSwitch {
   let on: Bool
   /// The tailnet that already routes this address.
   let blockedBy: String?
