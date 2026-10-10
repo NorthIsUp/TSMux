@@ -3,7 +3,7 @@
 # or in CI. Both platforms are the same App Store app (dev.northisup.tsmux).
 # From template-apple's testflight.sh, with a second profile for the tunnel extension.
 # usage: [PLATFORM=macos] ios-testflight.sh [--no-upload]
-#   --no-upload: export the .ipa (+ AppStoreInfo.plist for Linux Transporter) and stop. CI uses this,
+#   --no-upload: export the .ipa and stop. CI uses this,
 #   then uploads the .ipa from Linux and the .pkg with altool in the sign job.
 # env (none are secret): ASC_KEY_ID (238ATU74S4), ASC_ISSUER_ID
 #   optional: PLATFORM (ios|macos), CI_KEYCHAIN (ci.keychain-db), INTERNAL_ONLY (1),
@@ -41,7 +41,7 @@ xcodebuild -project "$SCHEME.xcodeproj" -scheme "$SCHEME" -configuration Release
   MARKETING_VERSION="$(tr -d '[:space:]' < ../VERSION)" \
   CURRENT_PROJECT_VERSION="$(date -u +%Y%m%d%H%M)" archive -quiet
 
-# Linux Transporter can't analyze an .ipa itself and needs AppStoreInfo.plist beside it.
+# testflight.py reads the .pkg's build number from the AppStoreInfo.plist beside it.
 cat > "$OUT/export.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
