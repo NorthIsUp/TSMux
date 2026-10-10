@@ -3,8 +3,8 @@
 # or in CI. Both platforms are the same App Store app (dev.northisup.tsmux).
 # From template-apple's testflight.sh, with a second profile for the tunnel extension.
 # usage: [PLATFORM=macos] ios-testflight.sh [--no-upload]
-#   --no-upload: export the .ipa (+ AppStoreInfo.plist for Linux Transporter) and stop. CI uses this
-#   and uploads from Linux.
+#   --no-upload: export the .ipa (+ AppStoreInfo.plist for Linux Transporter) and stop. CI uses this,
+#   then uploads the .ipa from Linux and the .pkg with altool in the sign job.
 # env (none are secret): ASC_KEY_ID (238ATU74S4), ASC_ISSUER_ID
 #   optional: PLATFORM (ios|macos), CI_KEYCHAIN (ci.keychain-db), INTERNAL_ONLY (1),
 #   OUT (build/testflight, or build/testflight-macos)

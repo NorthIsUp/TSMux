@@ -79,6 +79,7 @@ jobs:
     outputs:
       exported: ${{ steps.export.outcome == 'success' }}
       exported_mac: ${{ steps.export_mac.outcome == 'success' }}
+      uploaded_mac: ${{ steps.upload_mac.outcome }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -164,6 +165,28 @@ jobs:
           INTERNAL_ONLY: '0'
         run: scripts/ios-testflight.sh --no-upload
 
+      # Linux Transporter has never landed a .pkg: it rejects the upload before
+      # sending a byte and never says why. altool on macOS reads the .pkg itself.
+      # Failing here must not hold back the iOS build, so the testflight job
+      # reports it instead.
+      - name: Upload macOS to TestFlight
+        id: upload_mac
+        if: steps.export_mac.outcome == 'success' && github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: 238ATU74S4
+          ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          printf '%s' "$ASC_KEY_P8" > "$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
+          for attempt in 1 2; do
+            xcrun altool --upload-app -t macos -f ios/build/testflight-macos/TSMux.pkg \
+              --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" && exit 0
+            [ "$attempt" = 2 ] || sleep 30
+          done
+          exit 1
+
       - uses: actions/upload-artifact@v4
         if: steps.export_mac.outcome == 'success' && github.event_name != 'pull_request'
         with:
@@ -175,15 +198,20 @@ jobs:
           retention-days: 1
           compression-level: 0
 
-  # Every main push lands in internal TestFlight (iOS, and macOS once its
-  # secrets exist); a push that bumps VERSION
-  # also goes to Beta App Review for the public link. Both mostly wait on
-  # Apple, so they run on Linux, where minutes cost a tenth.
+  # Every main push lands in internal TestFlight, iOS and macOS; a push that
+  # bumps VERSION also goes to Beta App Review for the public link. Both mostly
+  # wait on Apple, so they run on Linux, where minutes cost a tenth.
   testflight:
     needs: [test, sign]
-    if: needs.sign.outputs.exported == 'true' && github.event_name != 'pull_request'
+    if: (needs.sign.outputs.exported == 'true' || needs.sign.outputs.exported_mac == 'true') && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
+    # Two runs uploading at once lost one of the .ipas. Queued, not cancelled,
+    # though GitHub keeps only the newest pending run, so a third push while one
+    # waits here drops the middle push's builds.
+    concurrency:
+      group: testflight
+      cancel-in-progress: false
     env:
       TRANSPORTER_VERSION: 4.0.0.4
     steps:
@@ -218,6 +246,7 @@ jobs:
           fi
 
       - uses: actions/download-artifact@v4
+        if: needs.sign.outputs.exported == 'true'
         with:
           name: ipa
           path: exports/ios
@@ -228,46 +257,58 @@ jobs:
           name: pkg
           path: exports/macos
 
+      # Each export goes all the way (upload, attach, ship) on its own, so one
+      # failing doesn't strand the others; the step fails at the end if any did.
       # Relative paths at the default log level fail the .ipa with no reason;
       # absolute paths at eXtreme upload. The full log is kept only on failure.
-      - name: Upload to TestFlight
+      - name: Upload, attach and ship each build
         env:
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           ASC_KEY_ID: 238ATU74S4
           ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
+          PUBLIC: ${{ steps.bump.outputs.public }}
+          MAC_UPLOAD: ${{ needs.sign.outputs.uploaded_mac }}
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
           printf '%s' "$ASC_KEY_P8" > "$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
           pip install --quiet 'pyjwt[crypto]'
-          for export in "$PWD"/exports/*/TSMux.*; do
-            if ~/itms/bin/iTMSTransporter -m upload -assetFile "$export" \
-                 -assetDescription "$(dirname "$export")/AppStoreInfo.plist" \
-                 -apiKey "$ASC_KEY_ID" -apiIssuer "$ASC_ISSUER_ID" -v eXtreme > transporter.log 2>&1; then
-              tail -40 transporter.log
-              continue
-            fi
-            grep -v -e 'indexing file' -e 'created symlink' transporter.log | tail -300
+          # The sign job uploads the .pkg; only the .ipa goes through Transporter.
+          upload() {
+            case $1 in
+              *.pkg) [ "$MAC_UPLOAD" = success ] && return 0; echo "the sign job's .pkg upload failed"; return 1 ;;
+            esac
+            log=transporter-$(basename "$(dirname "$1")").log
+            # The .ipa has also failed alone before sending a byte, and gone through on a rerun.
+            for attempt in 1 2; do
+              if ~/itms/bin/iTMSTransporter -m upload -assetFile "$1" \
+                   -assetDescription "$(dirname "$1")/AppStoreInfo.plist" \
+                   -apiKey "$ASC_KEY_ID" -apiIssuer "$ASC_ISSUER_ID" -v eXtreme > "$log" 2>&1; then
+                tail -40 "$log"
+                return 0
+              fi
+              grep -v -e 'indexing file' -e 'created symlink' "$log" | tail -300
+              [ "$attempt" = 2 ] || sleep 30
+            done
             # Transporter self-updates at launch and has failed with "parts failed"
             # after the build had in fact landed; App Store Connect is the truth.
-            python3 scripts/asc-build-landed.py "$export"
+            python3 scripts/asc-build-landed.py "$1"
+          }
+          failed=
+          for export in "$PWD"/exports/*/TSMux.*; do
+            echo "::group::$export"
+            if ! (upload "$export" && python3 scripts/testflight.py attach "$export" &&
+                  { [ "$PUBLIC" != true ] || python3 scripts/testflight.py ship "$export"; }); then
+              echo "::error::$(basename "$export") did not make it to TestFlight"
+              failed=1
+            fi
+            echo "::endgroup::"
           done
-
-      - name: Attach the builds to their App Store versions
-        env:
-          ASC_KEY_ID: 238ATU74S4
-          ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
-        run: for e in exports/*/TSMux.*; do python3 scripts/testflight.py attach "$e"; done
-
-      - name: Submit to the public beta
-        if: steps.bump.outputs.public == 'true'
-        env:
-          ASC_KEY_ID: 238ATU74S4
-          ASC_ISSUER_ID: 98c62465-9650-49ec-afe4-23318e5c1ae1
-        run: for e in exports/*/TSMux.*; do python3 scripts/testflight.py ship "$e"; done
+          [ -z "$failed" ]
 
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: transporter-log
-          path: transporter.log
+          path: transporter-*.log
+          if-no-files-found: ignore
           retention-days: 3
