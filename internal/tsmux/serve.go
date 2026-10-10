@@ -27,7 +27,7 @@ func Serve(cfg *Config, m *Manager, local http.Handler) (_ func(), err error) {
 		}
 	}()
 
-	serveProxies := func(label, httpAddr, socksAddr string, dial DialFunc) error {
+	serveProxies := func(label, httpAddr, socksAddr string, dial DialFunc, join JoinFunc) error {
 		hl, err := net.Listen("tcp", httpAddr)
 		if err != nil {
 			return fmt.Errorf("%s http proxy: %w", label, err)
@@ -38,13 +38,13 @@ func Serve(cfg *Config, m *Manager, local http.Handler) (_ func(), err error) {
 			return fmt.Errorf("%s socks proxy: %w", label, err)
 		}
 		closers = append(closers, func() { hl.Close(); sl.Close() })
-		go (&http.Server{Handler: &HTTPProxy{Dial: dial, Label: label}}).Serve(hl)
-		go ServeSOCKS5(sl, dial)
+		go (&http.Server{Handler: &HTTPProxy{Dial: dial, Join: join, Label: label}}).Serve(hl)
+		go ServeSOCKS5(sl, dial, join)
 		log.Printf("%-12s http %s  socks5 %s", label, httpAddr, socksAddr)
 		return nil
 	}
 
-	if err := serveProxies("router", cfg.Router.HTTPProxy, cfg.Router.SOCKS5Proxy, m.Dial); err != nil {
+	if err := serveProxies("router", cfg.Router.HTTPProxy, cfg.Router.SOCKS5Proxy, m.Dial, m.TLSJoin("")); err != nil {
 		return nil, err
 	}
 	for _, p := range cfg.Ordered() {
@@ -54,7 +54,7 @@ func Serve(cfg *Config, m *Manager, local http.Handler) (_ func(), err error) {
 		}
 		if err := serveProxies(p.Name,
 			fmt.Sprintf("127.0.0.1:%d", p.HTTPPort),
-			fmt.Sprintf("127.0.0.1:%d", p.SOCKSPort), n.Dial); err != nil {
+			fmt.Sprintf("127.0.0.1:%d", p.SOCKSPort), n.Dial, m.TLSJoin(p.Name)); err != nil {
 			return nil, err
 		}
 	}

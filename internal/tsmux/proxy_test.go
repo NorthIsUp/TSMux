@@ -66,7 +66,7 @@ func setup(t *testing.T) (*fakeTailnet, string, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sl.Close() })
-	go ServeSOCKS5(sl, f.Dial)
+	go ServeSOCKS5(sl, f.Dial, nil)
 
 	return f, hl.Addr().String(), sl.Addr().String()
 }
