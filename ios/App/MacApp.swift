@@ -199,6 +199,16 @@
       }
     }
 
+    func moveProfile(_ key: String, to index: Int) async -> Result<Void, CLIError> {
+      await call {
+        _ = try await self.tunnel.send(.moveProfile(key, to: index)).decode(ProfileEditResult.self)
+        if let i = KnownTailnet.saved.firstIndex(where: { $0.profile == key }) {
+          let t = KnownTailnet.saved.remove(at: i)
+          KnownTailnet.saved.insert(t, at: min(index, KnownTailnet.saved.count))
+        }
+      }
+    }
+
     func setHostname(_ key: String, _ name: String) async -> Result<Void, CLIError> {
       .failure(CLIError(message: "Renaming the device isn't available in this version."))
     }
