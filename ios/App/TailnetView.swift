@@ -86,9 +86,11 @@ struct TailnetView: View {
         }
       }
 
-      if let devices = t.devices, !devices.isEmpty {
+      if !(t.devices ?? []).isEmpty || !(t.services ?? []).isEmpty {
         Section {
-          NavigationLink("Devices (\(devices.count))") { DevicesView(profile: profile) }
+          NavigationLink("Devices (\(t.devices?.count ?? 0))") { DevicesView(profile: profile) }
+        } footer: {
+          Text("Touch and hold a device or service to route its IP address to this tailnet.")
         }
       }
 

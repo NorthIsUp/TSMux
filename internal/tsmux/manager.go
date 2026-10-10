@@ -46,6 +46,7 @@ type Node struct {
 	// learned split-DNS domains and subnet routes another profile already
 	// holds, as "claim (owner)"
 	routeConflicts []string
+	services       []Service
 
 	// Uptime is per tailnet, not per daemon: tailnets drop and reconnect
 	// independently, and one that just came back is worth noticing.
@@ -131,6 +132,18 @@ func (n *Node) RouteConflicts() []string {
 	n.authMu.Lock()
 	defer n.authMu.Unlock()
 	return slices.Clone(n.routeConflicts)
+}
+
+func (n *Node) setServices(s []Service) {
+	n.authMu.Lock()
+	defer n.authMu.Unlock()
+	n.services = s
+}
+
+func (n *Node) Services() []Service {
+	n.authMu.Lock()
+	defer n.authMu.Unlock()
+	return slices.Clone(n.services)
 }
 
 type Manager struct {
@@ -439,6 +452,7 @@ func (m *Manager) refreshLearned(ctx context.Context, lc *local.Client, n *Node)
 	before, beforeRoutes := m.cfg.LearnedOf(name)
 	domains, routes := learnFromNetmap(nm, prefs.CorpDNS(), prefs.RouteAll())
 	conflicts := m.cfg.setLearned(name, domains, routes)
+	n.setServices(servicesFromNetmap(nm))
 	after, afterRoutes := m.cfg.LearnedOf(name)
 	if !slices.Equal(before, after) || !slices.Equal(beforeRoutes, afterRoutes) {
 		log.Printf("[%s] routing split DNS [%s] and subnet routes [%s]",
@@ -715,7 +729,11 @@ type Status struct {
 	ExitProfile string           `json:"exit_profile,omitempty"`
 	ExitNodes   []ExitNodeOption `json:"exit_node_options,omitempty"`
 	Devices     []Device         `json:"devices,omitempty"`
-	TailnetLock *TailnetLock     `json:"tailnet_lock,omitempty"`
+	Services    []Service        `json:"services,omitempty"`
+	// RoutedIPs is everything this profile routes by address, including
+	// peers that have since left the tailnet.
+	RoutedIPs   []RoutedIP   `json:"routed_ips,omitempty"`
+	TailnetLock *TailnetLock `json:"tailnet_lock,omitempty"`
 }
 
 // TailnetLock is this node's standing under tailnet lock. A locked-out node
@@ -769,6 +787,19 @@ type Device struct {
 	// advertises through control, in authorized_keys form. A client pins
 	// them, as `tailscale ssh` does, instead of trusting on first use.
 	SSHHostKeys []string `json:"ssh_host_keys,omitempty"`
+	// Routed: this profile routes the device's addresses. RoutedBy names
+	// another profile that routes one of them, which keeps it from turning on.
+	Routed   bool   `json:"routed,omitempty"`
+	RoutedBy string `json:"routed_by,omitempty"`
+}
+
+// Service is a Tailscale Service this node can reach, from its netmap.
+type Service struct {
+	Name     string   `json:"name"` // "svc:<label>"
+	DNSName  string   `json:"dns_name,omitempty"`
+	IPs      []string `json:"ips,omitempty"`
+	Routed   bool     `json:"routed,omitempty"`
+	RoutedBy string   `json:"routed_by,omitempty"`
 }
 
 type StatusUser struct {
@@ -838,6 +869,11 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 		RouteConflicts: n.RouteConflicts(),
 		AdminURL:       adminURL(p.ControlURL),
 		ExitProfile:    m.cfg.ExitRoute().Profile,
+		Services:       n.Services(),
+		RoutedIPs:      m.cfg.RoutedIPsOf(p.Name),
+	}
+	for i := range s.Services {
+		s.Services[i].Routed, s.Services[i].RoutedBy = m.cfg.routeState(p.Name, s.Services[i].IPs)
 	}
 	lc, err := n.srv.LocalClient()
 	if err != nil {
@@ -889,6 +925,7 @@ func (m *Manager) statusOf(ctx context.Context, n *Node) Status {
 		for _, ip := range ps.TailscaleIPs {
 			d.IPs = append(d.IPs, ip.String())
 		}
+		d.Routed, d.RoutedBy = m.cfg.routeState(p.Name, d.IPs)
 		for _, k := range ps.SSH_HostKeys {
 			if k = strings.TrimSpace(k); k != "" && !strings.ContainsAny(k, "\r\n") {
 				d.SSHHostKeys = append(d.SSHHostKeys, k)

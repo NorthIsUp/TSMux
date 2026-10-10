@@ -95,6 +95,8 @@ func TestPrefsEndpointErrors(t *testing.T) {
 		{name: "unknown profile", path: "/prefs", body: `{"profile":"ghost"}`, want: http.StatusBadRequest},
 		{name: "logout malformed json", path: "/logout", body: "]", want: http.StatusBadRequest},
 		{name: "logout profile is not running", path: "/logout", body: `{"profile":"work"}`, want: http.StatusBadRequest},
+		{name: "route-ip malformed json", path: "/route-ip", body: "{", want: http.StatusBadRequest},
+		{name: "route-ip profile is not running", path: "/route-ip", body: `{"profile":"work","target":"romm","on":true}`, want: http.StatusBadRequest},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := post(t, h, tc.path, tc.body)

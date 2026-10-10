@@ -52,6 +52,15 @@ public struct TunnelRequest: Codable, Sendable, Equatable {
       method: "POST", path: "/profiles/move", body: try json(ProfileEdit(name: name, index: index)))
   }
 
+  /// Routes a device's or service's addresses to `profile`, or stops.
+  /// `target` is its name or one of its addresses.
+  public static func routeIP(_ profile: String, _ target: String, on: Bool) throws -> TunnelRequest
+  {
+    TunnelRequest(
+      method: "POST", path: "/route-ip",
+      body: try json(RouteIPChange(profile: profile, target: target, on: on)))
+  }
+
   public static func removeProfile(_ name: String) throws -> TunnelRequest {
     TunnelRequest(method: "POST", path: "/profiles/remove", body: try json(ProfileEdit(name: name)))
   }
@@ -141,6 +150,12 @@ extension ProfileStatus {
     s.prefs = prefs?.applying(c)
     return s
   }
+}
+
+struct RouteIPChange: Codable, Sendable {
+  var profile: String
+  var target: String
+  var on: Bool
 }
 
 struct ProfileEdit: Codable, Sendable {
