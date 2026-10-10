@@ -18,6 +18,8 @@ func TestLocalHandlerRequiresToken(t *testing.T) {
 		want                     int
 	}{
 		{name: "pac without token", method: "GET", path: "/proxy.pac", want: 200},
+		// The Mac tunnel versions the PAC URL it hands the OS.
+		{name: "versioned pac without token", method: "GET", path: "/proxy.pac?v=1a2b", want: 200},
 		{name: "status without token", method: "GET", path: "/status", want: 401},
 		{name: "status wrong token", method: "GET", path: "/status", auth: "Bearer nope", want: 401},
 		{name: "status bare token", method: "GET", path: "/status", auth: testToken, want: 401},
