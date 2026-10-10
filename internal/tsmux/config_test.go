@@ -289,3 +289,46 @@ func TestRenameProfile(t *testing.T) {
 		t.Errorf("state dir did not move: %v", err)
 	}
 }
+
+// The order is the user's and survives a save: new profiles go last, a removed
+// one drops out, a rename keeps its slot and a move sticks.
+func TestProfileOrder(t *testing.T) {
+	c := Default()
+	c.Paths.StateDir = t.TempDir()
+	c.Profiles = map[string]*Profile{"work": {}, "home": {}, "lab": {}}
+	c.ProfileOrder = []string{"work", "gone", "home"}
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	names := func() []string {
+		var out []string
+		for _, p := range c.Ordered() {
+			out = append(out, p.Name)
+		}
+		return out
+	}
+	if got, want := names(), []string{"work", "home", "lab"}; !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	if err := c.MoveProfile("lab", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RenameProfile("home", "house", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.MoveProfile("work", 3); err == nil {
+		t.Error("moving past the end should fail")
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := c.Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Load(path); err != nil {
+		t.Fatal(err)
+	} else if got, want := c.ProfileOrder, []string{"lab", "work", "house"}; !slices.Equal(got, want) {
+		t.Errorf("reloaded order = %v, want %v", got, want)
+	}
+}

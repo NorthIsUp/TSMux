@@ -45,6 +45,13 @@ public struct TunnelRequest: Codable, Sendable, Equatable {
       body: try json(ProfileEdit(name: name, displayName: displayName, newName: newName)))
   }
 
+  /// Puts a tailnet at `index` in the user's order, 0 being first: the one a
+  /// bare `tailscale` command talks to.
+  public static func moveProfile(_ name: String, to index: Int) throws -> TunnelRequest {
+    TunnelRequest(
+      method: "POST", path: "/profiles/move", body: try json(ProfileEdit(name: name, index: index)))
+  }
+
   public static func removeProfile(_ name: String) throws -> TunnelRequest {
     TunnelRequest(method: "POST", path: "/profiles/remove", body: try json(ProfileEdit(name: name)))
   }
@@ -141,9 +148,10 @@ struct ProfileEdit: Codable, Sendable {
   var displayName: String?
   var controlURL: String?
   var newName: String?
+  var index: Int?
 
   enum CodingKeys: String, CodingKey {
-    case name
+    case name, index
     case displayName = "display_name"
     case controlURL = "control_url"
     case newName = "new_name"

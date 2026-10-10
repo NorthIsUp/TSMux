@@ -797,11 +797,12 @@ type ExitNodeOption struct {
 func (m *Manager) Status(ctx context.Context) []Status {
 	m.mu.RLock()
 	nodes := make([]*Node, 0, len(m.nodes))
-	for _, n := range m.nodes {
-		nodes = append(nodes, n)
+	for _, p := range m.cfg.Ordered() {
+		if n := m.nodes[p.Name]; n != nil {
+			nodes = append(nodes, n)
+		}
 	}
 	m.mu.RUnlock()
-	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Profile.Name < nodes[j].Profile.Name })
 
 	out := make([]Status, 0, len(nodes))
 	for _, n := range nodes {

@@ -108,6 +108,7 @@ type profileRequest struct {
 	DisplayName string `json:"display_name,omitempty"`
 	ControlURL  string `json:"control_url,omitempty"`
 	NewName     string `json:"new_name,omitempty"`
+	Index       int    `json:"index,omitempty"`
 }
 
 func call(raw []byte) response {
@@ -116,7 +117,7 @@ func call(raw []byte) response {
 		return errResponse(http.StatusBadRequest, err)
 	}
 	switch req.Path {
-	case "/profiles/add", "/profiles/remove", "/profiles/rename":
+	case "/profiles/add", "/profiles/remove", "/profiles/rename", "/profiles/move":
 		var p profileRequest
 		if err := json.Unmarshal([]byte(req.Body), &p); err != nil {
 			return errResponse(http.StatusBadRequest, err)
@@ -130,6 +131,8 @@ func call(raw []byte) response {
 			warning, err = removeProfile(p)
 		case "/profiles/rename":
 			err = renameProfile(p)
+		case "/profiles/move":
+			err = editConfig(func(c *tsmux.Config) error { return c.MoveProfile(p.Name, p.Index) })
 		}
 		if err != nil {
 			return errResponse(http.StatusBadRequest, err)
@@ -325,7 +328,7 @@ func localAPI(c *tsmux.Config, m *tsmux.Manager) http.Handler {
 		w.WriteHeader(resp.Code)
 		io.WriteString(w, resp.Body)
 	}
-	for _, p := range []string{"/profiles/add", "/profiles/remove", "/profiles/rename"} {
+	for _, p := range []string{"/profiles/add", "/profiles/remove", "/profiles/rename", "/profiles/move"} {
 		mux.Handle(p, tsmux.TokenGuarded(apiToken, edit))
 	}
 	mux.Handle("/", c.LocalHandler(m, apiToken))

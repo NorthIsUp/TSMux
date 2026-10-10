@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -35,6 +37,13 @@ var (
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("tsmux: ")
+	// Linked as `tailscale`, so tools that expect the Tailscale CLI find one.
+	if filepath.Base(os.Args[0]) == "tailscale" {
+		if err := runTailscale(context.Background(), os.Args[1:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if err := root().Execute(); err != nil {
 		log.Fatal(err)
 	}
@@ -51,7 +60,7 @@ func root() *cobra.Command {
 	c.PersistentFlags().BoolVarP(&outputJSON, "json", "j", false, "emit JSON")
 	c.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging")
 	c.AddCommand(cmdInit(), cmdUp(), cmdDown(), cmdStatus(), cmdTest(), cmdProfile(), cmdPAC(),
-		cmdEnv(), cmdRun(), cmdConnect(), cmdTunnel(), cmdDNS(), cmdSSH(), cmdExpiry(), cmdDoctor(), cmdVersion())
+		cmdEnv(), cmdRun(), cmdConnect(), cmdTunnel(), cmdDNS(), cmdSSH(), cmdExpiry(), cmdDoctor(), cmdVersion(), cmdTailscale())
 	return c
 }
 
@@ -509,6 +518,42 @@ func cmdProfile() *cobra.Command {
 	c.AddCommand(rename)
 
 	c.AddCommand(cmdProfileSet())
+
+	c.AddCommand(&cobra.Command{
+		Use: "move <name> <position>", Short: "Reorder a profile; position 1 is the one a bare `tailscale` uses",
+		Args: cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			pos, err := strconv.Atoi(args[1])
+			if err != nil {
+				return fmt.Errorf("position must be a number, got %q", args[1])
+			}
+			cfg, err := load()
+			if err != nil {
+				return err
+			}
+			// Checked here first too: the app restarts its tailnets on any edit,
+			// even one it then refuses.
+			if err := cfg.MoveProfile(args[0], pos-1); err != nil {
+				return err
+			}
+			if cfg.FromApp() {
+				if _, err := cfg.EditInApp("/profiles/move", tsmux.ProfileEdit{Name: args[0], Index: pos - 1}); err != nil {
+					return err
+				}
+			} else {
+				if err := cfg.Normalize(); err != nil {
+					return err
+				}
+				if err := cfg.Save(cfg.Path()); err != nil {
+					return err
+				}
+			}
+			emit(map[string]any{"moved": args[0], "position": pos}, func() {
+				fmt.Printf("moved %s to position %d\n", args[0], pos)
+			})
+			return nil
+		},
+	})
 
 	c.AddCommand(&cobra.Command{
 		Use: "logout <name>", Short: "Forget a profile's tailnet credentials", Args: cobra.ExactArgs(1),

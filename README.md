@@ -117,12 +117,16 @@ go install github.com/NorthIsUp/tsmux@latest
 | `test <host>` | which tailnet owns a hostname, and why |
 | `run` / `env` | proxy environment for one command or a whole shell |
 | `ssh` / `connect` / `tunnel` | SSH, raw TCP, forwarded local ports |
-| `profile add/list/rm/set` | manage tailnets without the GUI |
+| `profile add/list/rm/set/move` | manage and reorder tailnets without the GUI |
+| `tailscale [-p name] …` | the real tailscale CLI's read-only commands (`status`, `ip`, `ping`, …) against a tailnet, the first by default |
 | `pac print/url/apply/restore` | the browser proxy config |
 | `expiry` | days left on each tailnet's node key; exits 1 when one is close |
 | `doctor` | config, port and overlap checks |
 
-Every command takes `--json`.
+Every command takes `--json`. Linked as `tailscale` (Settings → CLI
+integration → Also install as `tailscale`), tsmux acts as `tsmux tailscale`, so
+tools that expect the Tailscale CLI work against your first tailnet, or the one
+in `$TSMUX_PROFILE`.
 
 ## How it works
 

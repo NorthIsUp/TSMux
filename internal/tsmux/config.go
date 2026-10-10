@@ -1,6 +1,7 @@
 package tsmux
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,7 +27,10 @@ type Config struct {
 	Paths    Paths               `yaml:"paths"`
 	Security Security            `yaml:"security"`
 	Profiles map[string]*Profile `yaml:"profiles"`
-	Tunnels  map[string]*Tunnel  `yaml:"tunnels,omitempty"`
+	// ProfileOrder is the user's order for the tailnets; the first one is
+	// what a bare `tailscale` command talks to.
+	ProfileOrder []string           `yaml:"profile_order,omitempty"`
+	Tunnels      map[string]*Tunnel `yaml:"tunnels,omitempty"`
 
 	path    string
 	sorted  []*Profile
@@ -273,6 +277,27 @@ func (c *Config) Normalize() error {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+	// Profiles the order doesn't name yet go last, by name.
+	rank := map[string]int{}
+	for i, n := range c.ProfileOrder {
+		if _, ok := rank[n]; !ok {
+			rank[n] = i
+		}
+	}
+	slices.SortStableFunc(names, func(a, b string) int {
+		ra, okA := rank[a]
+		rb, okB := rank[b]
+		switch {
+		case okA && okB:
+			return cmp.Compare(ra, rb)
+		case okA:
+			return -1
+		case okB:
+			return 1
+		}
+		return 0
+	})
+	c.ProfileOrder = slices.Clone(names)
 
 	// Ports already pinned in the file are reserved first, so adding a profile
 	// that sorts before an existing one cannot steal its port.
@@ -386,7 +411,7 @@ func (c *Config) checkListen(addr string) error {
 	return nil
 }
 
-// Ordered returns profiles in stable (sorted) order. Lock-free: the slice and
+// Ordered returns profiles in ProfileOrder. Lock-free: the slice and
 // its members are fixed after Normalize; only Suffixes mutate, and readers of
 // those go through SuffixesOf.
 func (c *Config) Ordered() []*Profile { return c.sorted }
@@ -453,6 +478,23 @@ func (c *Config) RenameProfile(old, newName, display string) error {
 	}
 	delete(c.Profiles, old)
 	c.Profiles[newName] = p
+	if i := slices.Index(c.ProfileOrder, old); i >= 0 {
+		c.ProfileOrder[i] = newName
+	}
+	return nil
+}
+
+// MoveProfile puts a profile at index to (0 is first) in ProfileOrder.
+// Callers Normalize and save after.
+func (c *Config) MoveProfile(name string, to int) error {
+	i := slices.Index(c.ProfileOrder, name)
+	if i < 0 {
+		return fmt.Errorf("no profile %q", name)
+	}
+	if to < 0 || to >= len(c.ProfileOrder) {
+		return fmt.Errorf("position %d is out of range: there are %d profiles", to+1, len(c.ProfileOrder))
+	}
+	c.ProfileOrder = slices.Insert(slices.Delete(c.ProfileOrder, i, i+1), to, name)
 	return nil
 }
 
