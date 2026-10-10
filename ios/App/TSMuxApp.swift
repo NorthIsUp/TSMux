@@ -55,6 +55,7 @@ struct ContentView: View {
             ForEach(model.tailnets) { t in
               NavigationLink(value: t.profile) { TailnetRow(tailnet: t) }
             }
+            .onMove { from, to in Task { await model.move(from: from, to: to) } }
           }
         } else if !model.loaded && !model.known.isEmpty {
           // Last session's tailnets, until the tunnel says how they are now.

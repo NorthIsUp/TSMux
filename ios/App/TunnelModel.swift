@@ -190,6 +190,20 @@ final class TunnelModel {
     }
   }
 
+  /// A drag in the list, in `onMove` terms. Shown at once: the tunnel
+  /// restarts its tailnets to apply the new order.
+  func move(from source: IndexSet, to destination: Int) async {
+    guard let from = source.first, tailnets.indices.contains(from) else { return }
+    let key = tailnets[from].profile
+    let to = destination > from ? destination - 1 : destination
+    guard to != from else { return }
+    tailnets.move(fromOffsets: source, toOffset: destination)
+    await perform {
+      _ = try await send(.moveProfile(key, to: to)).decode(ProfileEditResult.self)
+    }
+    await refresh()
+  }
+
   func logout(_ profile: String) async {
     await perform {
       _ = try await send(.logout(profile)).decode(ProfileStatus.self)

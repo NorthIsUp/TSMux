@@ -303,6 +303,25 @@ public final class AppModel {
     return result
   }
 
+  /// A drag in the sidebar, in `onMove` terms: `destination` counts the row
+  /// being moved, so moving down lands one before it.
+  func moveProfile(from source: IndexSet, to destination: Int) {
+    guard let from = source.first, displayProfiles.indices.contains(from) else { return }
+    let key = displayProfiles[from].profile
+    let to = destination > from ? destination - 1 : destination
+    guard to != from else { return }
+    // Shown at once: the tunnel restarts its tailnets to apply the order.
+    if case .ok(var ps) = status {
+      ps.move(fromOffsets: source, toOffset: destination)
+      status = .ok(ps)
+    }
+    Task {
+      if case .failure(let e) = await mutateProfiles({ await $0.moveProfile(key, to: to) }) {
+        Alert.show("Could not reorder tailnets", e.message)
+      }
+    }
+  }
+
   // MARK: PAC
 
   /// Off by hand means off: an automatic re-apply on the next poll would be

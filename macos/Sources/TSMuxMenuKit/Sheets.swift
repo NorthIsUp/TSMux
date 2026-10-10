@@ -146,6 +146,7 @@ struct DNSSheet: View {
 struct CLIIntegrationSheet: View {
   @Environment(\.dismiss) private var dismiss
   @State private var installedAt = Self.linked
+  @State private var tailscaleLinked = Self.tailscaleIsOurs
   @State private var failure: String?
 
   /// No admin prompt and no root-owned directory: ~/.local/bin is the
@@ -158,6 +159,20 @@ struct CLIIntegrationSheet: View {
 
   private static var command: String {
     "mkdir -p ~/.local/bin && ln -sf '\(bundled?.path ?? "")' ~/.local/bin/tsmux"
+  }
+
+  private static let tailscaleLink = link.deletingLastPathComponent()
+    .appendingPathComponent("tailscale")
+  /// No -f: whatever is already there stays.
+  private static var tailscaleCommand: String {
+    "mkdir -p ~/.local/bin && ln -s '\(bundled?.path ?? "")' ~/.local/bin/tailscale"
+  }
+
+  /// Ours is a link to a tsmux, this copy or an older one; anything else
+  /// there is the user's.
+  private static var tailscaleIsOurs: Bool {
+    (try? FileManager.default.destinationOfSymbolicLink(atPath: tailscaleLink.path))
+      .map { URL(fileURLWithPath: $0).lastPathComponent == "tsmux" } ?? false
   }
 
   private static var linked: String? {
@@ -187,6 +202,27 @@ struct CLIIntegrationSheet: View {
       }
       .padding(10)
       .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.1)))
+      Divider()
+      if Self.sandboxed {
+        Text("To also answer to `tailscale`, run:")
+        HStack(alignment: .top, spacing: 8) {
+          Text(Self.tailscaleCommand)
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+          CopyButton(value: Self.tailscaleCommand)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.1)))
+      } else {
+        Toggle("Also install as `tailscale`", isOn: tailscaleBinding)
+          .disabled(Self.bundled == nil)
+      }
+      Text(
+        "`tailscale status`, `ip`, `ping` and other read-only commands then run against your first tailnet (or `-p name`). This shadows the Tailscale app's own CLI in ~/.local/bin."
+      )
+      .font(.caption).foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
       if let failure {
         Text(failure).font(.caption).foregroundStyle(.red)
       }
@@ -210,7 +246,34 @@ struct CLIIntegrationSheet: View {
       }
     }
     .padding(20)
-    .frame(width: 460, height: 280)
+    .frame(width: 460, height: 400)
+  }
+
+  private var tailscaleBinding: Binding<Bool> {
+    Binding(
+      get: { tailscaleLinked },
+      set: { on in
+        guard let bundled = Self.bundled else { return }
+        let fm = FileManager.default
+        let path = Self.tailscaleLink.path
+        do {
+          let exists = (try? fm.attributesOfItem(atPath: path)) != nil
+          if exists && !Self.tailscaleIsOurs {
+            failure = "\(path) already exists and isn't TSMux's, so it was left alone."
+            return
+          }
+          if exists { try fm.removeItem(atPath: path) }
+          if on {
+            try fm.createDirectory(
+              at: Self.tailscaleLink.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.createSymbolicLink(at: Self.tailscaleLink, withDestinationURL: bundled)
+          }
+          tailscaleLinked = on
+          failure = nil
+        } catch {
+          failure = error.localizedDescription
+        }
+      })
   }
 
   private func install() {

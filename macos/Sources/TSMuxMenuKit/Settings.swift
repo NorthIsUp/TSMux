@@ -51,6 +51,7 @@ public struct SettingsRootView: View {
               TailnetRow(profile: p, showProxy: model.displayProfiles.count > 1)
                 .tag(Route.tailnet(p.profile))
             }
+            .onMove { model.moveProfile(from: $0, to: $1) }
           } header: {
             // Add belongs to the list; remove belongs to the tailnet, where
             // "Remove Tailnet…" names what it will delete rather than acting on
