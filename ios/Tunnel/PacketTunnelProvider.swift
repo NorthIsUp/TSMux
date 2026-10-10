@@ -13,8 +13,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
   private let pacWatch = Mutex<Task<Void, Never>?>(nil)
 
   nonisolated(nonsending) override func startTunnel(options: [String: NSObject]?) async throws {
+    // The Developer ID system extension names its own, team-prefixed group:
+    // a group.* one needs a profile that the API can't assign a group to.
+    let group = Bundle.main.object(forInfoDictionaryKey: "TSMuxAppGroup") as? String ?? appGroupID
     guard
-      let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID)
+      let dir = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
     else { throw TunnelError(message: "app group container is missing") }
     try prepareStateDirectory(in: dir)
     if let err = dir.path.withCString({ TSMuxStart(UnsafeMutablePointer(mutating: $0)) }) {

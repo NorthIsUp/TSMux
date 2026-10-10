@@ -9,12 +9,12 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="$(tr -d '[:space:]' < VERSION)"
-BIN="macos/.build/artifacts/sparkle/Sparkle/bin"
+BIN="ios/.build-direct/SourcePackages/artifacts/sparkle/Sparkle/bin"
 ZIP="bin/TSMux-$VERSION-macos.zip"
 OUT="bin/appcast"
 
 [ -f "$ZIP" ] || { echo "no $ZIP — run scripts/devid.sh first" >&2; exit 1; }
-[ -x "$BIN/generate_appcast" ] || { echo "no Sparkle tools — run swift build in macos/" >&2; exit 1; }
+[ -x "$BIN/generate_appcast" ] || { echo "no Sparkle tools — run scripts/build-app.sh first" >&2; exit 1; }
 
 rm -rf "$OUT"; mkdir -p "$OUT"
 cp "$ZIP" "$OUT/"

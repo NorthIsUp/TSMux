@@ -14,6 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       HAS_IOS_SIGNING: ${{ secrets.DIST_P12_BASE64 != '' }}
+      HAS_DEVID: ${{ secrets.DEVID_P12 != '' && secrets.DIRECT_APP_PROFILE_BASE64 != '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -40,13 +41,15 @@ jobs:
         run: mise run build
 
       # The menu bar app only builds on macOS; keep it in the same pipeline so a
-      # Swift break fails CI rather than surfacing at release time.
+      # Swift break fails CI rather than surfacing at release time. With
+      # Developer ID secrets the sign job builds the DMG app instead.
       - name: swift build
         if: runner.os == 'macOS'
         run: |
           mise run ssh:lib
           swift test --package-path TSMuxShell
           (cd macos && swift build -c release)
+          if [ "$HAS_DEVID" != true ]; then ./scripts/build-app.sh --unsigned; fi
 
       # The iOS app: shared Swift models, then an unsigned device build of the
       # app and its tunnel extension around the Go core. With signing, the
@@ -70,7 +73,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     env:
-      HAS_DEVID: ${{ secrets.DEVID_P12 != '' }}
+      HAS_DEVID: ${{ secrets.DEVID_P12 != '' && secrets.DIRECT_APP_PROFILE_BASE64 != '' }}
       HAS_IOS_SIGNING: ${{ secrets.DIST_P12_BASE64 != '' }}
       HAS_MAC_STORE: ${{ secrets.MAC_APP_PROFILE_BASE64 != '' && secrets.DIST_P12_BASE64 != '' }}
     outputs:
@@ -101,9 +104,15 @@ jobs:
           INSTALLER_P12: ${{ secrets.INSTALLER_P12 }}
           MAC_APP_PROFILE_BASE64: ${{ secrets.MAC_APP_PROFILE_BASE64 }}
           MAC_TUNNEL_PROFILE_BASE64: ${{ secrets.MAC_TUNNEL_PROFILE_BASE64 }}
+          DIRECT_APP_PROFILE_BASE64: ${{ secrets.DIRECT_APP_PROFILE_BASE64 }}
+          DIRECT_TUNNEL_PROFILE_BASE64: ${{ secrets.DIRECT_TUNNEL_PROFILE_BASE64 }}
         run: |
           if [ "$HAS_DEVID" = true ]; then
             printf '%s\n%s\n' "$P12_PASSWORD" "$DEVID_P12" | scripts/ci-keychain.sh
+            profiles="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
+            mkdir -p "$profiles"
+            printf '%s' "$DIRECT_APP_PROFILE_BASE64" | base64 -D > "$profiles/tsmux-direct-app.provisionprofile"
+            printf '%s' "$DIRECT_TUNNEL_PROFILE_BASE64" | base64 -D > "$profiles/tsmux-direct-tunnel.provisionprofile"
           fi
           if [ "$HAS_IOS_SIGNING" = true ]; then
             printf '%s\n%s\n' "$DIST_P12_PASSWORD" "$DIST_P12_BASE64" | scripts/ci-keychain.sh

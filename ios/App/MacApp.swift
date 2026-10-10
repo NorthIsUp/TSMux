@@ -6,11 +6,19 @@
 
   @MainActor
   final class MacAppDelegate: NSObject, NSApplicationDelegate {
-    let controller = Controller(backend: TunnelBackend(), updater: nil)
+    #if DIRECT
+      let controller = Controller(backend: TunnelBackend(), updater: SparkleUpdater())
+    #else
+      let controller = Controller(backend: TunnelBackend(), updater: nil)
+    #endif
 
     func applicationWillFinishLaunching(_ notification: Notification) {
       _ = Controller.iconSelfCheck()
       NSApp.setActivationPolicy(.accessory)
+      #if DIRECT
+        DaemonMigration.run()
+        Task { try? await SystemExtension.shared.activate() }
+      #endif
     }
 
     /// Settings opens once, on the first launch the user made themselves, as
@@ -34,7 +42,7 @@
   /// quitting the app leaves it running, as a system VPN does.
   @MainActor
   final class TunnelBackend: Backend {
-    let features: BackendFeatures = [.systemVPN]
+    let features: BackendFeatures = [.systemVPN, .cliIntegration]
     var onChange: (() -> Void)?
 
     private let tunnel = TunnelModel()
@@ -69,9 +77,14 @@
       }
     }
 
-    /// The first start shows the system's "Add VPN Configurations" prompt,
+    /// A Developer ID build's tunnel is a system extension that has to be
+    /// installed, and approved the first time, before it can start. The
+    /// first start also shows the system's "Add VPN Configurations" prompt,
     /// which takes focus and leaves Settings behind whatever was in front.
     private func startTunnel() async throws {
+      #if DIRECT
+        try await SystemExtension.shared.activate()
+      #endif
       let prompts = tunnel.vpnStatus == .invalid
       defer { if prompts { SettingsScene.raise() } }
       try await tunnel.start()
@@ -93,6 +106,7 @@
 
     func status() async -> StatusResult {
       guard tunnel.isConnected else { return .daemonDown }
+      await publishCLIEndpoint()
       do {
         let tailnets = try await tunnel.send(.status).decode([ProfileStatus].self)
         KnownTailnet.saved = tailnets.map { KnownTailnet(profile: $0.profile, name: $0.name) }
@@ -100,6 +114,39 @@
       } catch {
         return .failed(error.localizedDescription)
       }
+    }
+
+    private var publishedEndpoint: CLIEndpoint?
+
+    /// Tells the bundled CLI where the extension's API is. Checked on every
+    /// poll because the token changes whenever an edit restarts the core.
+    private func publishCLIEndpoint() async {
+      guard let ep = try? await tunnel.send(.cli).decode(CLIEndpoint.self),
+        ep != publishedEndpoint, let file = Self.cliEndpointFile
+      else { return }
+      do {
+        try FileManager.default.createDirectory(
+          at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(ep).write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        publishedEndpoint = ep
+      } catch {
+        NSLog("tsmux: can't write \(file.path): \(error)")
+      }
+    }
+
+    /// The first of the paths the CLI reads (`AppEndpointPaths` in
+    /// internal/tsmux/app.go); the App Store build's sandboxed CLI can only
+    /// read the shared group container.
+    private static var cliEndpointFile: URL? {
+      #if DIRECT
+        FileManager.default.homeDirectoryForCurrentUser
+          .appendingPathComponent("Library/Application Support/TSMux/cli-endpoint.json")
+      #else
+        FileManager.default
+          .containerURL(forSecurityApplicationGroupIdentifier: "4BJBDQVY6M.dev.northisup.tsmux")?
+          .appendingPathComponent("cli-endpoint.json")
+      #endif
     }
 
     /// The tunnel holds the config, and it may be off, so this is the list

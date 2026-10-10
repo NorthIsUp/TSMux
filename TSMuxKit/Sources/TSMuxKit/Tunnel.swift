@@ -16,6 +16,8 @@ public struct TunnelRequest: Codable, Sendable, Equatable {
 
   public static let status = TunnelRequest(method: "GET", path: "/status")
   public static let pac = TunnelRequest(method: "GET", path: "/proxy.pac")
+  /// Where the Mac extension serves the API for the bundled CLI.
+  public static let cli = TunnelRequest(method: "GET", path: "/cli")
 
   public static func prefs(_ p: PrefsChange) throws -> TunnelRequest {
     TunnelRequest(method: "POST", path: "/prefs", body: try json(p))
@@ -67,6 +69,13 @@ public struct TunnelResponse: Codable, Sendable {
     }
     return try JSONDecoder().decode(T.self, from: data)
   }
+}
+
+/// The `/cli` reply. The app writes it where the CLI looks
+/// (`internal/tsmux/app.go`); the token changes every time the core restarts.
+public struct CLIEndpoint: Codable, Sendable, Equatable {
+  public let url: String
+  public let token: String
 }
 
 /// The body of a `/profiles/…` edit. `warning` is set when the edit went

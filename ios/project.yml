@@ -18,6 +18,9 @@ packages:
     path: ../TSMuxShell
   TSMuxMenu:
     path: ../macos
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.0
 schemes:
   TSMux:
     build:
@@ -26,13 +29,37 @@ schemes:
     test:
       targets:
         - package: TSMuxKit/TSMuxKitTests
+  TSMuxDirect:
+    build:
+      targets:
+        TSMuxDirect: all
 targets:
   # One app record for both platforms: on macOS it is the App Store menu bar
-  # app (the DMG app in ../macos is the separate CLI edition).
+  # app (TSMuxDirect below is the DMG edition).
   TSMux:
     type: application
     supportedDestinations: [iOS, macOS]
-    sources: [App]
+    sources:
+      - path: App
+        excludes: [tsmux-cli.entitlements]
+      # Built by scripts/build-cli.sh; signed below.
+      - path: ../bin/tsmux
+        buildPhase:
+          copyFiles:
+            destination: resources
+        destinationFilters: [macOS]
+        optional: true
+    # The App Store wants every executable sandboxed, so the bundled CLI gets
+    # its own sandbox, reaching the app's endpoint through the shared group.
+    postBuildScripts:
+      - name: Sign the bundled CLI
+        basedOnDependencyAnalysis: false
+        script: |
+          [ "$PLATFORM_NAME" = macosx ] || exit 0
+          cli="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/tsmux"
+          [ -f "$cli" ] || exit 0
+          codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --options runtime \
+            --entitlements "$SRCROOT/App/tsmux-cli.entitlements" "$cli"
     dependencies:
       - package: TSMuxKit
       - package: TSMuxShell
@@ -112,3 +139,106 @@ targets:
           "CODE_SIGN_IDENTITY[sdk=macosx*]": Apple Distribution
           PROVISIONING_PROFILE_SPECIFIER: TSMux Tunnel App Store
           "PROVISIONING_PROFILE_SPECIFIER[sdk=macosx*]": TSMux Tunnel Mac App Store
+  # The same Mac app for GitHub releases, differing only where distribution
+  # forces it: Developer ID signing, Sparkle updates, and the tunnel as a
+  # system extension (TSMuxDirectTunnel) instead of an app extension. Its
+  # bundle id, feed and key are what installed DMG copies check for updates.
+  TSMuxDirect:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes: [tsmux-cli.entitlements, TSMux-macOS.entitlements]
+      - Direct
+      # Built by scripts/build-app.sh before xcodebuild runs.
+      - path: ../bin/tsmux
+        buildPhase:
+          copyFiles:
+            destination: resources
+        attributes: [CodeSignOnCopy]
+        optional: true
+    dependencies:
+      - package: TSMuxKit
+      - package: TSMuxShell
+      - package: TSMuxMenu
+        product: TSMuxMenuKit
+      - package: Sparkle
+      - target: TSMuxDirectTunnel
+    entitlements:
+      path: Direct/TSMuxDirect.entitlements
+      properties:
+        com.apple.developer.networking.networkextension: [packet-tunnel-provider-systemextension]
+        com.apple.developer.system-extension.install: true
+    info:
+      path: Direct/Info.plist
+      properties:
+        CFBundleName: TSMux
+        CFBundleDisplayName: TSMux
+        # Sparkle compares CFBundleVersion, so both come from VERSION (build-app.sh).
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSApplicationCategoryType: public.app-category.utilities
+        LSUIElement: true
+        NSHighResolutionCapable: true
+        SUFeedURL: https://github.com/NorthIsUp/tsmux/releases/latest/download/appcast.xml
+        SUPublicEDKey: SEebdGvE5oDNyriWJ8nAnln9mG+X4F+2BiR5n/a3Kmw=
+        SUEnableAutomaticChecks: true
+    settings:
+      base:
+        PRODUCT_NAME: TSMux
+        PRODUCT_BUNDLE_IDENTIFIER: dev.northisup.tsmux.menu
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) DIRECT
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: Developer ID Application
+        PROVISIONING_PROFILE_SPECIFIER: TSMux Direct
+  TSMuxDirectTunnel:
+    type: system-extension
+    platform: macOS
+    sources:
+      - Tunnel/PacketTunnelProvider.swift
+      - DirectTunnel
+    dependencies:
+      - package: TSMuxKit
+      - framework: Frameworks/TSMuxCore.xcframework
+        embed: false
+    entitlements:
+      path: DirectTunnel/TSMuxDirectTunnel.entitlements
+      properties:
+        com.apple.developer.networking.networkextension: [packet-tunnel-provider-systemextension]
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [4BJBDQVY6M.dev.northisup.tsmux]
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        # The extension runs as root, and its group container lives under
+        # root's home, which the sandbox doesn't open on its own. Tailscale's
+        # extension carries the same exception.
+        com.apple.security.temporary-exception.files.absolute-path.read-write:
+          - /private/var/root/Library/Group Containers/
+    info:
+      path: DirectTunnel/Info.plist
+      properties:
+        CFBundleDisplayName: TSMux Tunnel
+        # sysextd refuses a network extension without either of these.
+        CFBundlePackageType: SYSX
+        NSSystemExtensionUsageDescription: TSMux routes your tailnets' traffic through this network extension.
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        TSMuxAppGroup: 4BJBDQVY6M.dev.northisup.tsmux
+        NetworkExtension:
+          # Must start with one of the extension's app groups.
+          NEMachServiceName: 4BJBDQVY6M.dev.northisup.tsmux.tunnel
+          NEProviderClasses:
+            com.apple.networkextension.packet-tunnel: $(PRODUCT_MODULE_NAME).PacketTunnelProvider
+    settings:
+      base:
+        # sysextd finds the extension by a bundle named after its identifier.
+        PRODUCT_NAME: dev.northisup.tsmux.menu.tunnel
+        PRODUCT_MODULE_NAME: TSMuxDirectTunnel
+        PRODUCT_BUNDLE_IDENTIFIER: dev.northisup.tsmux.menu.tunnel
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: Developer ID Application
+        PROVISIONING_PROFILE_SPECIFIER: TSMux Direct Tunnel

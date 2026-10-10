@@ -55,7 +55,26 @@ func root() *cobra.Command {
 	return c
 }
 
-func load() (*tsmux.Config, error) { return tsmux.Load(cfgPath) }
+// load prefers the Mac app's tailnets while the app is running and no
+// --config was given: they live in its network extension, not a file here.
+func load() (*tsmux.Config, error) {
+	if cfgPath == "" {
+		if cfg, err := tsmux.LoadFromApp(); err == nil {
+			return cfg, nil
+		}
+	}
+	return tsmux.Load(cfgPath)
+}
+
+// loadDaemon is load for commands that start or stop a daemon or point the
+// system proxy at it, none of which apply to the app's tailnets.
+func loadDaemon() (*tsmux.Config, error) {
+	cfg, err := load()
+	if err == nil && cfg.FromApp() {
+		return nil, errors.New("the TSMux app runs these tailnets; turn them on and off in the app")
+	}
+	return cfg, err
+}
 
 // loadOrDefault treats "no config file yet" as an empty config, so the GUI's
 // launch probe and the first `profile add` do not have to special-case it.
@@ -121,7 +140,7 @@ func cmdUp() *cobra.Command {
 		Use:   "up",
 		Short: "Start every tailnet profile, the router, and the PAC server",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := load()
+			cfg, err := loadDaemon()
 			if err != nil {
 				return err
 			}
@@ -176,7 +195,7 @@ func cmdDown() *cobra.Command {
 	return &cobra.Command{
 		Use: "down", Short: "Stop the running tsmux daemon",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg, err := load()
+			cfg, err := loadDaemon()
 			if err != nil {
 				return err
 			}
@@ -315,6 +334,20 @@ func cmdProfile() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cfg.FromApp() {
+				if len(suffixes) > 0 || authEnv != "" || matchRoot {
+					return errors.New("the TSMux app takes only --display-name and --control-url")
+				}
+				if _, err := cfg.EditInApp("/profiles/add", tsmux.ProfileEdit{
+					Name: args[0], DisplayName: displayName, ControlURL: control,
+				}); err != nil {
+					return err
+				}
+				emit(map[string]string{"added": args[0]}, func() {
+					fmt.Printf("added %s to the TSMux app; sign in from its menu\n", args[0])
+				})
+				return nil
+			}
 			if _, ok := cfg.Profiles[args[0]]; ok {
 				return fmt.Errorf("profile %q already exists", args[0])
 			}
@@ -356,6 +389,25 @@ func cmdProfile() *cobra.Command {
 			}
 			if _, ok := cfg.Profiles[args[0]]; !ok {
 				return fmt.Errorf("no profile %q", args[0])
+			}
+			// The app always logs out and deletes the login: nothing else can
+			// reach its extension's state to clean up later.
+			if cfg.FromApp() {
+				warning, err := cfg.EditInApp("/profiles/remove", tsmux.ProfileEdit{Name: args[0]})
+				if err != nil {
+					return err
+				}
+				out := map[string]any{"removed": args[0], "purged": true}
+				if warning != "" {
+					out["warning"] = warning
+				}
+				emit(out, func() {
+					fmt.Printf("removed %s from the TSMux app (logged out)\n", args[0])
+					if warning != "" {
+						fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
+					}
+				})
+				return nil
 			}
 			// The daemon holds the state dir open; removing it underneath a
 			// live node leaves a node with nowhere to write.
@@ -417,6 +469,21 @@ func cmdProfile() *cobra.Command {
 			newName := args[0]
 			if len(args) == 2 {
 				newName = args[1]
+			}
+			if cfg.FromApp() {
+				display := renameDisplay
+				if display == "" && cfg.Profiles[args[0]] != nil {
+					display = cfg.Profiles[args[0]].DisplayName
+				}
+				if _, err := cfg.EditInApp("/profiles/rename", tsmux.ProfileEdit{
+					Name: args[0], NewName: newName, DisplayName: display,
+				}); err != nil {
+					return err
+				}
+				emit(map[string]string{"renamed": args[0], "to": newName}, func() {
+					fmt.Printf("renamed %s to %s in the TSMux app\n", args[0], newName)
+				})
+				return nil
 			}
 			// Same reason as rm: the daemon holds the state dir open.
 			if newName != args[0] {
@@ -628,7 +695,7 @@ func cmdPAC() *cobra.Command {
 	c.AddCommand(&cobra.Command{
 		Use: "apply", Short: "Point the system proxy at the PAC file",
 		RunE: func(_ *cobra.Command, _ []string) error {
-			cfg, err := load()
+			cfg, err := loadDaemon()
 			if err != nil {
 				return err
 			}

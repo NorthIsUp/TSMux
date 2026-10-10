@@ -13,12 +13,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -38,6 +40,8 @@ var (
 	mgr      *tsmux.Manager
 	closeAll func()
 	cancel   context.CancelFunc
+	// apiToken guards the loopback API the Mac extension serves for the CLI.
+	apiToken string
 )
 
 func main() {}
@@ -138,6 +142,13 @@ func call(raw []byte) response {
 	defer mu.RUnlock()
 	if mgr == nil {
 		return errResponse(http.StatusServiceUnavailable, errors.New("tsmux is not running"))
+	}
+	if req.Path == "/cli" {
+		if apiToken == "" {
+			return errResponse(http.StatusNotFound, errors.New("no loopback API on this platform"))
+		}
+		b, _ := json.Marshal(tsmux.AppEndpoint{URL: "http://" + cfg.Router.PACListen, Token: apiToken})
+		return response{Code: http.StatusOK, Body: string(b)}
 	}
 	// guard() only admits loopback JSON requests with no Origin, which is
 	// exactly what this is; the extension is the only caller.
@@ -268,10 +279,26 @@ func up() error {
 			return err
 		}
 	}
-	// No PAC/API listener: the app reaches the API through TSMuxCall, and the
-	// tunnel hands iOS the PAC as script. On TCP loopback any other app could
-	// call it.
-	closer, err := tsmux.Serve(c, m, nil)
+	// The app reaches the API through TSMuxCall, and the tunnel hands the OS
+	// the PAC as script. Only the Mac serves it on loopback too, for the CLI
+	// bundled in the app; the token keeps other users and apps out.
+	var local http.Handler
+	if runtime.GOOS == "darwin" {
+		// One token for the extension's lifetime: every profile edit restarts
+		// the core, and a new token each time would leave the CLI holding a
+		// stale one until the app next republishes it.
+		if apiToken == "" {
+			tok, err := tsmux.NewAPIToken()
+			if err != nil {
+				cancelCtx()
+				m.Close()
+				return err
+			}
+			apiToken = tok
+		}
+		local = localAPI(c, m)
+	}
+	closer, err := tsmux.Serve(c, m, local)
 	if err != nil {
 		cancelCtx()
 		m.Close()
@@ -279,6 +306,30 @@ func up() error {
 	}
 	cfg, mgr, closeAll, cancel = c, m, closer, cancelCtx
 	return nil
+}
+
+// localAPI is the daemon's local API plus the profile edits only this core
+// has. An edit restarts the core and closes this listener, but not the
+// connection the request came in on, so the reply still arrives.
+func localAPI(c *tsmux.Config, m *tsmux.Manager) http.Handler {
+	mux := http.NewServeMux()
+	edit := func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req, _ := json.Marshal(request{Method: http.MethodPost, Path: r.URL.Path, Body: string(body)})
+		resp := call(req)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.Code)
+		io.WriteString(w, resp.Body)
+	}
+	for _, p := range []string{"/profiles/add", "/profiles/remove", "/profiles/rename"} {
+		mux.Handle(p, tsmux.TokenGuarded(apiToken, edit))
+	}
+	mux.Handle("/", c.LocalHandler(m, apiToken))
+	return mux
 }
 
 // down stops whatever up started. Callers hold mu.

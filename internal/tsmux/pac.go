@@ -135,6 +135,7 @@ func (c *Config) InProcessHandler(m *Manager) http.Handler {
 		defer cancel()
 		writeJSON(w, http.StatusOK, m.Status(ctx))
 	}, false))
+	mux.Handle("/config", guard(c.configYAML, false))
 	mux.Handle("/shutdown", guard(func(w http.ResponseWriter, r *http.Request) {
 		if !m.RequestStop() {
 			writeJSON(w, http.StatusServiceUnavailable,
@@ -298,9 +299,13 @@ func (c *Config) post(path string, body any) (Status, error) {
 // call sends one request to the daemon with the install's token. A missing
 // token file is not fatal here: the daemon's 401 says more than "no such file".
 func (c *Config) call(method, path string, body []byte, timeout time.Duration) (*http.Response, error) {
-	tok, err := readToken(c.TokenPath())
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, err
+	tok := c.apiToken
+	if tok == "" {
+		var err error
+		tok, err = readToken(c.TokenPath())
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
 	}
 	req, err := http.NewRequest(method, "http://"+c.Router.PACListen+path, bytes.NewReader(body))
 	if err != nil {
