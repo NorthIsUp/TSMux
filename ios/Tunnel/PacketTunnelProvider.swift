@@ -64,7 +64,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
       addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.255"])
     let proxy = NEProxySettings()
     proxy.autoProxyConfigurationEnabled = true
-    proxy.proxyAutoConfigurationJavaScript = pac
+    #if os(macOS)
+      // By URL, the way `tsmux pac apply` did: Chromium reads only a PAC URL,
+      // and Safari never sent requests the inline script routed to a proxy.
+      // The query changes with the script, so the OS refetches it.
+      if let url = Self.pacURL(version: pac) {
+        proxy.proxyAutoConfigurationURL = url
+      } else {
+        proxy.proxyAutoConfigurationJavaScript = pac
+      }
+    #else
+      proxy.proxyAutoConfigurationJavaScript = pac
+    #endif
     // With no routes claimed, iOS ignores proxy settings unless matchDomains
     // is set; "" is a suffix of every host, and the PAC sends the rest DIRECT
     // or, with an exit node in use, to that tailnet's proxy.
@@ -77,6 +88,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
       appliedPAC.withLock { $0 = "" }
       throw error
     }
+  }
+
+  /// The core's loopback PAC, which only the Mac serves.
+  private static func pacURL(version pac: String) -> URL? {
+    guard
+      let ep = try? JSONDecoder().decode(
+        TunnelResponse.self, from: Data(call(try encode(.cli)).utf8)
+      ).decode(CLIEndpoint.self)
+    else { return nil }
+    let v = String(UInt(bitPattern: pac.hashValue), radix: 36)
+    return URL(string: "\(ep.url)/proxy.pac?v=\(v)")
   }
 
   private static func encode(_ req: TunnelRequest) throws -> String {

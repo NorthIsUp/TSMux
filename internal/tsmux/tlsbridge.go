@@ -96,7 +96,8 @@ func joinTLS(down, up net.Conn, hostport, name string, roots *x509.CertPool) {
 	hello, err := peekClientHello(br)
 	down.SetReadDeadline(time.Time{})
 	down = &readConn{down, br}
-	if err != nil || hello.ServerName != "" {
+	// An IP is no server name (RFC 6066), but Safari sends one through a proxy.
+	if err != nil || hello.ServerName != "" && net.ParseIP(hello.ServerName) == nil {
 		pipe(down, up)
 		return
 	}
