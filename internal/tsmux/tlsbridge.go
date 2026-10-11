@@ -11,12 +11,15 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log"
 	"math/big"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +29,7 @@ import (
 // to any profile's when profile is "" (the router). See joinTLS.
 func (m *Manager) TLSJoin(profile string) JoinFunc {
 	return func(down, up net.Conn, hostport string) {
-		joinTLS(down, up, hostport, m.bridgeName(profile, hostport), nil)
+		joinTLS(down, up, hostport, m.bridgeName(profile, hostport), m.cfg.Paths.StateDir, nil)
 	}
 }
 
@@ -86,7 +89,7 @@ func (c *Config) routedEntry(profile string, a netip.Addr) (string, RoutedIP) {
 // handshake transcript, so the connection is terminated here with a
 // self-signed certificate for the IP, and re-originated to name with the
 // upstream certificate verified as usual. roots nil means the system's.
-func joinTLS(down, up net.Conn, hostport, name string, roots *x509.CertPool) {
+func joinTLS(down, up net.Conn, hostport, name, certDir string, roots *x509.CertPool) {
 	if name == "" {
 		pipe(down, up)
 		return
@@ -115,7 +118,7 @@ func joinTLS(down, up net.Conn, hostport, name string, roots *x509.CertPool) {
 				log.Printf("tls bridge %s as %s: %v", hostport, name, err)
 				return nil, err
 			}
-			cert, err := bridgeCert(host)
+			cert, err := bridgeCert(certDir, host)
 			if err != nil {
 				return nil, err
 			}
@@ -170,26 +173,60 @@ type replayConn struct {
 func (c *replayConn) Read(b []byte) (int, error)  { return c.r.Read(b) }
 func (c *replayConn) Write(b []byte) (int, error) { return len(b), nil }
 
-// One key per process, one certificate per IP: the browser warns once per
-// address until the process restarts.
+// bridgeCerts caches the certificates loaded from or written to disk, by path.
 var bridgeCerts struct {
 	sync.Mutex
-	key   *ecdsa.PrivateKey
-	certs map[string]*tls.Certificate
+	byPath map[string]*tls.Certificate
 }
 
-func bridgeCert(ip string) (*tls.Certificate, error) {
+// bridgeCertDays stays inside Apple's 825-day limit on TLS server certificates.
+const bridgeCertDays = 800
+
+// bridgeCert is the self-signed certificate for ip, kept in dir so a browser's
+// click-through survives a restart. One key and file per IP, mode 0600. An
+// empty dir keeps it in memory only.
+func bridgeCert(dir, ip string) (*tls.Certificate, error) {
+	path := ""
+	if dir != "" {
+		path = filepath.Join(dir, "bridge-certs", ip+".pem")
+	}
 	bridgeCerts.Lock()
 	defer bridgeCerts.Unlock()
-	if c, ok := bridgeCerts.certs[ip]; ok {
+	if c, ok := bridgeCerts.byPath[path+"|"+ip]; ok && time.Until(c.Leaf.NotAfter) > 30*24*time.Hour {
 		return c, nil
 	}
-	if bridgeCerts.key == nil {
-		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			return nil, err
+	if bridgeCerts.byPath == nil {
+		bridgeCerts.byPath = map[string]*tls.Certificate{}
+	}
+	if path != "" {
+		if b, err := os.ReadFile(path); err == nil {
+			if c, err := tls.X509KeyPair(b, b); err == nil && time.Until(c.Leaf.NotAfter) > 30*24*time.Hour {
+				bridgeCerts.byPath[path+"|"+ip] = &c
+				return &c, nil
+			}
 		}
-		bridgeCerts.key, bridgeCerts.certs = k, map[string]*tls.Certificate{}
+	}
+	pemBytes, err := newBridgeCert(ip)
+	if err != nil {
+		return nil, err
+	}
+	c, err := tls.X509KeyPair(pemBytes, pemBytes)
+	if err != nil {
+		return nil, err
+	}
+	if path != "" {
+		if err := writePrivate(path, pemBytes); err != nil {
+			log.Printf("tls bridge: can't save the certificate for %s: %v", ip, err)
+		}
+	}
+	bridgeCerts.byPath[path+"|"+ip] = &c
+	return &c, nil
+}
+
+func newBridgeCert(ip string) ([]byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 64))
 	if err != nil {
@@ -201,15 +238,38 @@ func bridgeCert(ip string) (*tls.Certificate, error) {
 		Subject:      pkix.Name{CommonName: ip, Organization: []string{"tsmux"}},
 		IPAddresses:  []net.IP{net.ParseIP(ip)},
 		NotBefore:    now.Add(-time.Hour),
-		NotAfter:     now.Add(365 * 24 * time.Hour),
+		NotAfter:     now.Add(bridgeCertDays * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &bridgeCerts.key.PublicKey, bridgeCerts.key)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		return nil, err
 	}
-	c := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: bridgeCerts.key}
-	bridgeCerts.certs[ip] = c
-	return c, nil
+	kder, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	out := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	return append(out, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kder})...), nil
+}
+
+// writePrivate writes b to path atomically, readable by its owner only.
+func writePrivate(path string, b []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".cert-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }

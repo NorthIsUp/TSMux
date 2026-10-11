@@ -3,6 +3,7 @@ package tsmux
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
@@ -13,6 +14,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -47,7 +50,8 @@ func bridgeProxy(t *testing.T, backend, name string, roots *x509.CertPool) *url.
 	}
 	t.Cleanup(func() { ln.Close() })
 	dial := (&fakeTailnet{backend: backend}).Dial
-	join := func(down, up net.Conn, hostport string) { joinTLS(down, up, hostport, name, roots) }
+	dir := t.TempDir()
+	join := func(down, up net.Conn, hostport string) { joinTLS(down, up, hostport, name, dir, roots) }
 	go (&http.Server{Handler: &HTTPProxy{Dial: dial, Join: join}}).Serve(ln)
 	u, _ := url.Parse("http://" + ln.Addr().String())
 	return u
@@ -172,5 +176,36 @@ func TestTLSBridgeTreatsIPSNIAsNone(t *testing.T) {
 	// ServerHello (22) comes back.
 	if first[0] != 22 {
 		t.Errorf("first record type %d, want a ServerHello from the bridge", first[0])
+	}
+}
+
+func TestBridgeCertSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	first, err := bridgeCert(dir, "100.90.45.67")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A restart: nothing in memory, only what is on disk.
+	bridgeCerts.Lock()
+	bridgeCerts.byPath = nil
+	bridgeCerts.Unlock()
+	again, err := bridgeCert(dir, "100.90.45.67")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sha256.Sum256(first.Certificate[0]) != sha256.Sum256(again.Certificate[0]) {
+		t.Error("the certificate changed across a restart")
+	}
+	other, _ := bridgeCert(dir, "100.90.13.168")
+	if bytes.Equal(other.Certificate[0], first.Certificate[0]) {
+		t.Error("two IPs share a certificate")
+	}
+	for path, want := range map[string]os.FileMode{
+		filepath.Join(dir, "bridge-certs"):                     0o700 | os.ModeDir,
+		filepath.Join(dir, "bridge-certs", "100.90.45.67.pem"): 0o600,
+	} {
+		if fi, err := os.Stat(path); err != nil || fi.Mode() != want {
+			t.Errorf("%s: mode %v, want %v (%v)", path, fi.Mode(), want, err)
+		}
 	}
 }
