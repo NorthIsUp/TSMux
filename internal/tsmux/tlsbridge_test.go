@@ -1,8 +1,11 @@
 package tsmux
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -13,8 +16,8 @@ import (
 	"testing"
 )
 
-// sniServer is Tailscale Serve as far as SNI goes: a hello without one is
-// refused. Its certificate is httptest's, which covers example.com.
+// sniServer is Tailscale Serve as far as SNI goes: a hello without its name
+// is refused. Its certificate is httptest's, which covers example.com.
 func sniServer(t *testing.T) (*httptest.Server, *x509.CertPool) {
 	t.Helper()
 	s := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -24,8 +27,8 @@ func sniServer(t *testing.T) (*httptest.Server, *x509.CertPool) {
 	s.StartTLS()
 	t.Cleanup(s.Close)
 	s.TLS.GetConfigForClient = func(h *tls.ClientHelloInfo) (*tls.Config, error) {
-		if h.ServerName == "" {
-			return nil, errors.New("no SNI ServerName")
+		if h.ServerName != "example.com" {
+			return nil, errors.New("no cert for this SNI ServerName")
 		}
 		return nil, nil
 	}
@@ -131,5 +134,43 @@ func TestBridgeName(t *testing.T) {
 		if got := m.bridgeName(tc.profile, tc.hostport); got != tc.want {
 			t.Errorf("%q %s = %q, want %q", tc.profile, tc.hostport, got, tc.want)
 		}
+	}
+}
+
+// Safari sends the IP as SNI when it goes through a proxy. Go's client never
+// does, so the hello is rewritten by hand: same length, so no lengths change.
+func TestTLSBridgeTreatsIPSNIAsNone(t *testing.T) {
+	s, roots := sniServer(t)
+	proxy := bridgeProxy(t, s.Listener.Addr().String(), "example.com", roots)
+
+	c, s2 := net.Pipe()
+	go tls.Client(c, &tls.Config{ServerName: "abcdefghijkl", InsecureSkipVerify: true}).Handshake()
+	br := bufio.NewReader(s2)
+	hdr, _ := br.Peek(5)
+	rec := make([]byte, 5+int(binary.BigEndian.Uint16(hdr[3:5])))
+	if _, err := io.ReadFull(br, rec); err != nil {
+		t.Fatal(err)
+	}
+	rec = bytes.Replace(rec, []byte("abcdefghijkl"), []byte("100.90.45.67"), 1)
+
+	conn, err := net.Dial("tcp", proxy.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprint(conn, "CONNECT 100.90.45.67:443 HTTP/1.1\r\nHost: 100.90.45.67:443\r\n\r\n")
+	cr := bufio.NewReader(conn)
+	if resp, err := http.ReadResponse(cr, nil); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("CONNECT: %v %v", resp, err)
+	}
+	conn.Write(rec)
+	first, err := cr.Peek(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Spliced, the backend refuses the name with an alert (21); bridged, a
+	// ServerHello (22) comes back.
+	if first[0] != 22 {
+		t.Errorf("first record type %d, want a ServerHello from the bridge", first[0])
 	}
 }
