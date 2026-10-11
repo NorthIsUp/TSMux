@@ -17,10 +17,23 @@ import (
 // DialFunc opens a TCP connection to hostport inside some tailnet.
 type DialFunc func(ctx context.Context, network, hostport string) (net.Conn, error)
 
+// JoinFunc carries a proxied connection once both ends are open. nil means
+// pipe, which copies bytes verbatim.
+type JoinFunc func(down, up net.Conn, hostport string)
+
+func (j JoinFunc) join(down, up net.Conn, hostport string) {
+	if j == nil {
+		pipe(down, up)
+		return
+	}
+	j(down, up, hostport)
+}
+
 // HTTPProxy is a loopback HTTP proxy. CONNECT is tunnelled verbatim so TLS
-// stays end-to-end; plain HTTP is forwarded.
+// stays end-to-end, except where Join bridges it; plain HTTP is forwarded.
 type HTTPProxy struct {
 	Dial  DialFunc
+	Join  JoinFunc
 	Label string
 }
 
@@ -79,24 +92,27 @@ func (p *HTTPProxy) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Anything the client pipelined after CONNECT is already buffered.
-	if n := buf.Reader.Buffered(); n > 0 {
-		if b, err := buf.Reader.Peek(n); err == nil {
-			up.Write(b)
-		}
-	}
-	pipe(down, up)
+	p.Join.join(&readConn{down, buf.Reader}, up, r.Host)
 }
+
+// readConn reads through r, which buffers ahead of the Conn.
+type readConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *readConn) Read(b []byte) (int, error) { return c.r.Read(b) }
 
 // ServeSOCKS5 runs a minimal SOCKS5 CONNECT server (no auth, loopback only).
 // Hostnames are passed through unresolved so routing sees the real name.
-func ServeSOCKS5(ln net.Listener, dial DialFunc) error {
+func ServeSOCKS5(ln net.Listener, dial DialFunc, join JoinFunc) error {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return err
 		}
 		go func() {
-			if err := socksHandle(c, dial); err != nil && err != io.EOF {
+			if err := socksHandle(c, dial, join); err != nil && err != io.EOF {
 				log.Printf("socks5: %v", err)
 			}
 		}()
@@ -111,7 +127,7 @@ const (
 	atypIPv6   = 0x04
 )
 
-func socksHandle(c net.Conn, dial DialFunc) error {
+func socksHandle(c net.Conn, dial DialFunc, join JoinFunc) error {
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(30 * time.Second))
 
@@ -184,7 +200,7 @@ func socksHandle(c net.Conn, dial DialFunc) error {
 		return err
 	}
 	c.SetDeadline(time.Time{})
-	pipe(c, up)
+	join.join(c, up, target)
 	return nil
 }
 
