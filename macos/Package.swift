@@ -22,6 +22,11 @@ let package = Package(
         .product(name: "TSMuxShell", package: "TSMuxShell"),
       ],
       path: "Sources/TSMuxMenuKit"
-    )
+    ),
+    .testTarget(
+      name: "TSMuxMenuKitTests",
+      dependencies: ["TSMuxMenuKit"],
+      path: "Tests/TSMuxMenuKitTests"
+    ),
   ]
 )

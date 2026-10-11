@@ -48,6 +48,7 @@ jobs:
         run: |
           mise run ssh:lib
           swift test --package-path TSMuxShell
+          swift test --package-path macos
           (cd macos && swift build -c release)
           if [ "$HAS_DEVID" != true ]; then ./scripts/build-app.sh --unsigned; fi
 

@@ -553,6 +553,66 @@ public final class Controller: NSObject, NSMenuDelegate {
     menu.addItem(shell)
   }
 
+  /// Services submenu, nil when the tailnet offers none. Same stacked
+  /// alternates as Devices: plain copies the DNS name, Option the IP. A row
+  /// can't hold both alternates and a toggle, so routing rides on Command and
+  /// the checkmark shows its state.
+  static func servicesItem(_ p: ProfileStatus, target: AnyObject?) -> NSMenuItem? {
+    guard let services = p.services, !services.isEmpty else { return nil }
+    let root = NSMenuItem(title: "Services (\(services.count))", action: nil, keyEquivalent: "")
+    root.image = menuGlyph("server.rack")
+    let menu = NSMenu()
+    menu.autoenablesItems = false
+    for s in services {
+      let ip = s.ips?.first
+      let on = s.routed == true
+      let route = s.routedBy.map { "routed to \($0)" } ?? (on ? "stop routing IP" : "route this IP")
+      let variants: [(String?, Any?, Selector, NSEvent.ModifierFlags)] = [
+        (nil, s.dnsName, #selector(copyValue(_:)), []),
+        (ip, ip, #selector(copyValue(_:)), [.option]),
+        (
+          route, RouteIP(profile: p.profile, target: s.name, on: !on),
+          #selector(toggleRoutedIP(_:)), [.command]
+        ),
+      ]
+      for (i, v) in variants.enumerated() {
+        let mi = NSMenuItem(title: s.shortName, action: v.2, keyEquivalent: "")
+        mi.target = target
+        mi.keyEquivalentModifierMask = v.3
+        mi.isAlternate = i > 0
+        mi.state = on ? .on : .off
+        mi.representedObject = v.1
+        mi.isEnabled = v.1 != nil
+        if let hint = v.0 { mi.attributedTitle = rowWithHint(s.shortName, hint) }
+        mi.toolTip = [s.dnsName, ip].compactMap { $0 }.joined(separator: " · ")
+        menu.addItem(mi)
+      }
+      // Another tailnet owns this address, so turning it on here is refused.
+      if s.routedBy != nil, !on { menu.items.last?.isEnabled = false }
+    }
+    menu.addItem(.separator())
+    let legend = NSMenuItem(title: "⌥ copy IP   ⌘ route IP", action: nil, keyEquivalent: "")
+    legend.isEnabled = false
+    menu.addItem(legend)
+    root.submenu = menu
+    return root
+  }
+
+  struct RouteIP {
+    let profile: String
+    let target: String
+    let on: Bool
+  }
+
+  @objc private func toggleRoutedIP(_ sender: NSMenuItem) {
+    guard let r = sender.representedObject as? RouteIP else { return }
+    Task {
+      if let err = await model.setRoutedIP(r.profile, r.target, on: r.on) {
+        Alert.show("Could not change routing for \(r.target)", err)
+      }
+    }
+  }
+
   @objc private func openShell(_ sender: NSMenuItem) {
     guard let target = sender.representedObject as? ShellTarget else { return }
     ShellWindows.open(target)
@@ -679,6 +739,7 @@ public final class Controller: NSObject, NSMenuDelegate {
       sub.addItem(mi)
     }
     addDevices(p, to: sub)
+    if let services = Self.servicesItem(p, target: self) { sub.addItem(services) }
     sub.addItem(.separator())
 
     let http = p.httpProxy ?? ""
