@@ -44,6 +44,8 @@ public protocol Backend: AnyObject {
   /// Puts a tailnet at `index` in the list, 0 being first.
   func moveProfile(_ key: String, to index: Int) async -> Result<Void, CLIError>
   func setHostname(_ key: String, _ name: String) async -> Result<Void, CLIError>
+  /// Claims or releases DNS suffixes; another tailnet's suffix is refused.
+  func setSuffixes(_ key: String, add: [String], remove: [String]) async -> Result<Void, CLIError>
   func doctor() async -> Result<DoctorReport, CLIError>
   func version() async -> VersionInfo?
   func pacURL() async -> String?

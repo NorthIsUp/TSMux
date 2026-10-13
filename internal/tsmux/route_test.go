@@ -1,7 +1,10 @@
 package tsmux
 
 import (
+	"context"
 	"fmt"
+	"net/netip"
+	"strings"
 	"testing"
 )
 
@@ -136,5 +139,37 @@ func TestRouteExitNodeFallback(t *testing.T) {
 				t.Errorf("got %s (%s), want %s (%s)", m.Profile.Name, m.Reason, tc.want, tc.wantMatch)
 			}
 		})
+	}
+}
+
+func TestRouteByPeers(t *testing.T) {
+	c := cfg(t)
+	edge, svc := netip.MustParseAddr("100.91.127.62"), netip.MustParseAddr("100.100.0.9")
+	c.setPeers("work", []netip.Addr{edge, svc})
+	c.setPeers("home", []netip.Addr{netip.MustParseAddr("100.70.0.1"), svc})
+	dns := map[string][]netip.Addr{
+		"dagster.example.dev": {edge},
+		"svc.example.dev":     {svc},
+		"split.example.dev":   {edge, netip.MustParseAddr("100.70.0.1")},
+		"public.example.dev":  {netip.MustParseAddr("93.184.216.34")},
+	}
+	c.lookupIP = func(_ context.Context, host string) ([]netip.Addr, error) {
+		if a, ok := dns[host]; ok {
+			return a, nil
+		}
+		return nil, fmt.Errorf("no such host %s", host)
+	}
+
+	m, err := c.Route("dagster.example.dev:443")
+	if err != nil || m.Profile.Name != "work" || !strings.Contains(m.Reason, "100.91.127.62") {
+		t.Fatalf("match: %+v %v", m, err)
+	}
+	if _, err := c.Route("svc.example.dev"); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("an address both tailnets have should be refused, got %v", err)
+	}
+	for _, host := range []string{"split.example.dev", "public.example.dev", "nxdomain.example.dev"} {
+		if m, err := c.Route(host); err == nil || strings.Contains(err.Error(), "ambiguous") {
+			t.Errorf("%s: want today's no-claim refusal, got %+v %v", host, m, err)
+		}
 	}
 }

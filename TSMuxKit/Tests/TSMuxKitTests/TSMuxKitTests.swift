@@ -140,6 +140,16 @@ import Testing
     #expect(body?.keys.sorted() == ["accept_routes", "profile"])
   }
 
+  /// Matches the Go core's ProfileEdit (internal/tsmux/app.go).
+  @Test func setProfileBodyCarriesOnlyTheSuffixEdit() throws {
+    let req = try TunnelRequest.setProfile("work", addSuffixes: [".example.dev"])
+    #expect(req.path == "/profiles/set")
+    let body =
+      try JSONSerialization.jsonObject(with: Data(try #require(req.body).utf8)) as? [String: Any]
+    #expect(body?.keys.sorted() == ["add_suffixes", "name"])
+    #expect(body?["add_suffixes"] as? [String] == [".example.dev"])
+  }
+
   @Test func pendingPrefsChangeShowsOnlyWhatItSets() throws {
     let s = try #require(try fixture().first)
     let before = try #require(s.prefs)

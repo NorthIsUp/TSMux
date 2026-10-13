@@ -103,7 +103,7 @@ func (c *Config) configYAML(w http.ResponseWriter, _ *http.Request) {
 }
 
 // ProfileEdit is the body of the app extension's /profiles/add, /remove,
-// /rename and /move (mobile/main.go).
+// /rename, /move and /set (mobile/main.go).
 type ProfileEdit struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name,omitempty"`
@@ -111,6 +111,10 @@ type ProfileEdit struct {
 	NewName     string `json:"new_name,omitempty"`
 	// Index is where /move puts the profile, 0 being first.
 	Index int `json:"index,omitempty"`
+	// Hostname, AddSuffixes and RemoveSuffixes are /set's, as in SetProfile.
+	Hostname       *string  `json:"hostname,omitempty"`
+	AddSuffixes    []string `json:"add_suffixes,omitempty"`
+	RemoveSuffixes []string `json:"remove_suffixes,omitempty"`
 }
 
 // EditInApp sends a profile edit to the app's extension, which restarts its

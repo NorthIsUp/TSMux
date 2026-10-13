@@ -68,6 +68,8 @@ struct DNSSheet: View {
   let profile: ProfileStatus
   @Environment(\.dismiss) private var dismiss
   @State private var inlineError: String?
+  @State private var newSuffix = ""
+  @State private var busy = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
@@ -84,21 +86,28 @@ struct DNSSheet: View {
           }
         }
         Section("Extra suffixes this tailnet claims") {
-          if profile.extraSuffixes.isEmpty {
-            Text("none").foregroundStyle(.secondary)
-          } else {
-            ForEach(profile.extraSuffixes, id: \.self) { s in
+          ForEach(profile.extraSuffixes, id: \.self) { s in
+            HStack {
               Text(s).font(.system(.body, design: .monospaced))
+              Spacer()
+              Button("Remove \(s)", systemImage: "minus.circle") {
+                editSuffixes(remove: [s])
+              }
+              .labelStyle(.iconOnly)
+              .buttonStyle(.borderless)
+              .disabled(busy)
             }
           }
-          Text(
-            "Routing sends these to this tailnet. Most setups need none, and the "
-              + "search domain above is learned automatically. Edit them in "
-              + "config.yaml under Advanced."
-          )
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
+          HStack {
+            TextField("Suffix", text: $newSuffix, prompt: Text(".example.com"))
+              .font(.system(.body, design: .monospaced))
+              .onSubmit(addSuffix)
+            Button("Add", action: addSuffix)
+              .disabled(busy || newSuffix.trimmingCharacters(in: .whitespaces).isEmpty)
+          }
+          Text("Names under these suffixes go to this tailnet, in browsers too.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
         }
       }
       .formStyle(.grouped)
@@ -129,6 +138,32 @@ struct DNSSheet: View {
       } icon: {
         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
       }
+    }
+  }
+
+  private func addSuffix() {
+    let s = newSuffix.trimmingCharacters(in: .whitespaces)
+    guard !s.isEmpty else { return }
+    editSuffixes(add: [s])
+  }
+
+  /// The tunnel restarts its tailnets to apply the edit, so the list catches
+  /// up on the next status refresh.
+  private func editSuffixes(add: [String] = [], remove: [String] = []) {
+    let key = profile.profile
+    busy = true
+    Task {
+      let outcome = await model.mutateProfiles { backend in
+        await backend.setSuffixes(key, add: add, remove: remove)
+      }
+      busy = false
+      if case .failure(let e) = outcome {
+        inlineError = e.message
+        return
+      }
+      inlineError = nil
+      if !add.isEmpty { newSuffix = "" }
+      model.refresh()
     }
   }
 

@@ -126,6 +126,30 @@ func comparePrefix(a, b netip.Prefix) int {
 	return a.Bits() - b.Bits()
 }
 
+// peersFromNetmap lists every address a peer or service answers on.
+func peersFromNetmap(nm *netmap.NetworkMap) []netip.Addr {
+	var out []netip.Addr
+	for _, p := range nm.Peers {
+		for _, a := range p.Addresses().All() {
+			if a.IsSingleIP() {
+				out = append(out, a.Addr())
+			}
+		}
+	}
+	for _, d := range nm.Services() {
+		out = append(out, d.Addrs...)
+	}
+	return out
+}
+
+func (c *Config) setPeers(name string, addrs []netip.Addr) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if p, ok := c.Profiles[name]; ok {
+		p.peers = addrs
+	}
+}
+
 // setLearned replaces a profile's runtime-learned domains and routes. Nothing
 // is written to config.yaml: these follow the tailnet's admin settings and
 // would go stale on disk. A claim another profile already holds, statically

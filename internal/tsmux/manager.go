@@ -333,6 +333,7 @@ func (m *Manager) watch(ctx context.Context, name string, srv *tsnet.Server) {
 				netmapAt = time.Time{}
 				n.learnMu.Lock()
 				m.cfg.setLearned(name, nil, nil)
+				m.cfg.setPeers(name, nil)
 				n.setRouteConflicts(nil)
 				n.learnMu.Unlock()
 			}
@@ -453,6 +454,7 @@ func (m *Manager) refreshLearned(ctx context.Context, lc *local.Client, n *Node)
 	domains, routes := learnFromNetmap(nm, prefs.CorpDNS(), prefs.RouteAll())
 	conflicts := m.cfg.setLearned(name, domains, routes)
 	n.setServices(servicesFromNetmap(nm))
+	m.cfg.setPeers(name, peersFromNetmap(nm))
 	after, afterRoutes := m.cfg.LearnedOf(name)
 	if !slices.Equal(before, after) || !slices.Equal(beforeRoutes, afterRoutes) {
 		log.Printf("[%s] routing split DNS [%s] and subnet routes [%s]",

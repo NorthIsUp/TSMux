@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,6 +137,14 @@ func (c *Config) InProcessHandler(m *Manager) http.Handler {
 		writeJSON(w, http.StatusOK, m.Status(ctx))
 	}, false))
 	mux.Handle("/config", guard(c.configYAML, false))
+	mux.Handle("/route", guard(func(w http.ResponseWriter, r *http.Request) {
+		match, err := c.Route(r.URL.Query().Get("host"))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"profile": match.Profile.Name, "reason": match.Reason})
+	}, false))
 	mux.Handle("/tailscale/", guard(m.localAPIProxy, false))
 	mux.Handle("/shutdown", guard(func(w http.ResponseWriter, r *http.Request) {
 		if !m.RequestStop() {
@@ -373,6 +382,28 @@ func (c *Config) FetchStatus() ([]Status, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// FetchRoute asks the running daemon how it routes host: only it knows each
+// tailnet's peers, which an unclaimed name can resolve to.
+func (c *Config) FetchRoute(host string) (*Match, error) {
+	resp, err := c.call(http.MethodGet, "/route?host="+url.QueryEscape(host), nil, 3*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if err := apiError(resp); err != nil {
+		return nil, err
+	}
+	var r struct{ Profile, Reason string }
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, err
+	}
+	p, ok := c.Profiles[r.Profile]
+	if !ok {
+		return nil, fmt.Errorf("daemon routed %s to unknown profile %q", host, r.Profile)
+	}
+	return &Match{p, r.Reason}, nil
 }
 
 // RefuseIfRunning errors when a daemon may be holding profile's state dir.

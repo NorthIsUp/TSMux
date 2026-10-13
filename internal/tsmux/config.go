@@ -2,6 +2,7 @@ package tsmux
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -48,6 +49,10 @@ type Config struct {
 
 	// apiToken is set on a config read from the Mac app (app.go).
 	apiToken string
+
+	// lookupIP resolves names no rule claims (routeByPeers); nil is the
+	// host's resolver. Tests replace it.
+	lookupIP func(ctx context.Context, host string) ([]netip.Addr, error)
 }
 
 // ExitRoute names the profile whose exit node carries public traffic. A host
@@ -137,6 +142,8 @@ type Profile struct {
 	// netmap. In memory only, guarded by Config.mu.
 	learnedSuffixes []string
 	learnedRoutes   []netip.Prefix
+	// peers is every peer and service address in the netmap, for routeByPeers.
+	peers []netip.Addr
 }
 
 // RoutedIP is one peer's or service's addresses, kept with its name so the
@@ -623,4 +630,35 @@ func (c *Config) ReleaseSuffix(profile, suffix string) bool {
 	}
 	p.Suffixes = append(p.Suffixes[:i], p.Suffixes[i+1:]...)
 	return true
+}
+
+// SetProfile applies the config-level part of `profile set`: the device name
+// and claimed suffixes. The CLI runs it on a config file, the app's extension
+// on its own config when the CLI asks over /profiles/set.
+func (c *Config) SetProfile(name string, hostname *string, add, remove []string) error {
+	p, ok := c.Profiles[name]
+	if !ok {
+		return fmt.Errorf("no profile %q", name)
+	}
+	if hostname != nil {
+		if err := ValidateHostname(*hostname); err != nil {
+			return err
+		}
+		p.Hostname = *hostname
+	}
+	for _, sfx := range add {
+		owner, err := c.ClaimSuffix(name, sfx)
+		if err != nil {
+			return err
+		}
+		if owner != "" {
+			return fmt.Errorf("%s is already claimed by profile %q", sfx, owner)
+		}
+	}
+	for _, sfx := range remove {
+		if !c.ReleaseSuffix(name, sfx) {
+			return fmt.Errorf("profile %q does not claim %s", name, sfx)
+		}
+	}
+	return nil
 }

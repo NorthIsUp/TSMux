@@ -1,13 +1,19 @@
 package tsmux
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 )
+
+// resolveTimeout caps the host-resolver lookup in routeByPeers, which every
+// request for an unclaimed name waits on.
+const resolveTimeout = time.Second
 
 // Match explains a routing decision. Reason is surfaced by `tsmux test`.
 type Match struct {
@@ -80,6 +86,17 @@ func (c *Config) Route(hostport string) (*Match, error) {
 		}
 	}
 
+	// The PAC has no netmap or resolver to do this with, so browsers still
+	// need a suffix for these names.
+	if strings.Contains(host, ".") && c.hasPeersLocked() {
+		c.mu.RUnlock()
+		m, err := c.routeByPeers(host)
+		c.mu.RLock()
+		if m != nil || err != nil {
+			return m, err
+		}
+	}
+
 	if exit := c.exitProfileLocked(); exit != nil && exitCarriesName(host, c.exit.AllowLAN) {
 		return &Match{exit, "fallback to " + exit.Name + " exit node"}, nil
 	}
@@ -129,6 +146,45 @@ func prefixes(cidrs ...string) []netip.Prefix {
 		out[i] = netip.MustParsePrefix(s)
 	}
 	return out
+}
+
+func (c *Config) hasPeersLocked() bool {
+	return slices.ContainsFunc(c.sorted, func(p *Profile) bool { return len(p.peers) > 0 })
+}
+
+// routeByPeers routes a name by where the host's resolver says it points: a
+// public A record for a tailnet address (dagster.example.dev -> 100.x) names
+// a peer in whichever tailnet has that address. nil, nil means no tailnet does.
+func (c *Config) routeByPeers(host string) (*Match, error) {
+	lookup := c.lookupIP
+	if lookup == nil {
+		lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
+	defer cancel()
+	addrs, err := lookup(ctx, host)
+	if err != nil || len(addrs) == 0 {
+		return nil, nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var names []string
+	var owner *Profile
+	for _, p := range c.sorted {
+		if !slices.ContainsFunc(addrs, func(a netip.Addr) bool { return !slices.Contains(p.peers, a.Unmap()) }) {
+			owner = p
+			names = append(names, p.Name)
+		}
+	}
+	switch len(names) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &Match{owner, "resolves to " + addrs[0].Unmap().String() + ", a peer"}, nil
+	}
+	return nil, fmt.Errorf("%s: ambiguous, resolves to peers in %s; claim it with a suffix (tsmux profile set --add-suffix)", host, strings.Join(names, ", "))
 }
 
 func (c *Config) fallback(host, why string) (*Match, error) {
