@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"unsafe"
@@ -103,21 +104,17 @@ type editResult struct {
 	Warning string `json:"warning,omitempty"`
 }
 
-type profileRequest struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name,omitempty"`
-	ControlURL  string `json:"control_url,omitempty"`
-	NewName     string `json:"new_name,omitempty"`
-	Index       int    `json:"index,omitempty"`
-}
+type profileRequest = tsmux.ProfileEdit
+
+// editPaths are the config edits only this core can make, each a restart.
+var editPaths = []string{"/profiles/add", "/profiles/remove", "/profiles/rename", "/profiles/move", "/profiles/set"}
 
 func call(raw []byte) response {
 	var req request
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return errResponse(http.StatusBadRequest, err)
 	}
-	switch req.Path {
-	case "/profiles/add", "/profiles/remove", "/profiles/rename", "/profiles/move":
+	if slices.Contains(editPaths, req.Path) {
 		var p profileRequest
 		if err := json.Unmarshal([]byte(req.Body), &p); err != nil {
 			return errResponse(http.StatusBadRequest, err)
@@ -133,6 +130,10 @@ func call(raw []byte) response {
 			err = renameProfile(p)
 		case "/profiles/move":
 			err = editConfig(func(c *tsmux.Config) error { return c.MoveProfile(p.Name, p.Index) })
+		case "/profiles/set":
+			err = editConfig(func(c *tsmux.Config) error {
+				return c.SetProfile(p.Name, p.Hostname, p.AddSuffixes, p.RemoveSuffixes)
+			})
 		}
 		if err != nil {
 			return errResponse(http.StatusBadRequest, err)
@@ -328,7 +329,7 @@ func localAPI(c *tsmux.Config, m *tsmux.Manager) http.Handler {
 		w.WriteHeader(resp.Code)
 		io.WriteString(w, resp.Body)
 	}
-	for _, p := range []string{"/profiles/add", "/profiles/remove", "/profiles/rename", "/profiles/move"} {
+	for _, p := range editPaths {
 		mux.Handle(p, tsmux.TokenGuarded(apiToken, edit))
 	}
 	mux.Handle("/", c.LocalHandler(m, apiToken))

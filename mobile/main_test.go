@@ -117,6 +117,18 @@ func TestCallLifecycle(t *testing.T) {
 		t.Fatalf("rename should move the state dir: %v", err)
 	}
 
+	set := profileRequest{Name: "acme", AddSuffixes: []string{"acme.dev"}}
+	if r := mustCall(t, "POST", "/profiles/set", set); r.Code != 200 {
+		t.Fatalf("set: %+v", r)
+	}
+	if r := mustCall(t, "GET", "/proxy.pac", nil); !strings.Contains(r.Body, ".acme.dev") {
+		t.Fatalf("pac should route the claimed suffix: %+v", r)
+	}
+	set = profileRequest{Name: "acme", RemoveSuffixes: []string{".nope.dev"}}
+	if r := mustCall(t, "POST", "/profiles/set", set); r.Code != 400 {
+		t.Fatalf("releasing an unclaimed suffix should fail: %+v", r)
+	}
+
 	if r := mustCall(t, "POST", "/profiles/remove", profileRequest{Name: "acme"}); r.Code != 200 {
 		t.Fatalf("remove: %+v", r)
 	}

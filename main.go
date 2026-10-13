@@ -292,7 +292,10 @@ func cmdTest() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			m, err := cfg.Route(args[0])
+			m, err := cfg.FetchRoute(args[0])
+			if errors.Is(err, tsmux.ErrDaemonDown) {
+				m, err = cfg.Route(args[0])
+			}
 			if err != nil {
 				return err
 			}
@@ -622,43 +625,36 @@ func cmdProfileSet() *cobra.Command {
 			}
 			// Config-level changes (device name, claimed domains) are not live
 			// prefs: the daemon fixes both when a node starts, so they apply on
-			// its next start rather than being pushed to a running node.
-			p := cfg.Profiles[args[0]]
-			configChanged := false
+			// its next start. The app restarts its nodes to apply them, so they
+			// are checked on this copy first and a conflict costs no restart.
+			var host *string
 			if cmd.Flags().Changed("hostname") {
-				if err := tsmux.ValidateHostname(hostname); err != nil {
-					return err
-				}
-				p.Hostname = hostname
-				configChanged = true
+				host = &hostname
 			}
-			for _, sfx := range addSuffix {
-				owner, err := cfg.ClaimSuffix(args[0], sfx)
-				if err != nil {
-					return err
-				}
-				if owner != "" {
-					return fmt.Errorf("%s is already claimed by profile %q", sfx, owner)
-				}
-				configChanged = true
+			if err := cfg.SetProfile(args[0], host, addSuffix, rmSuffix); err != nil {
+				return err
 			}
-			for _, sfx := range rmSuffix {
-				if !cfg.ReleaseSuffix(args[0], sfx) {
-					return fmt.Errorf("profile %q does not claim %s", args[0], sfx)
-				}
-				configChanged = true
-			}
-			if configChanged {
-				if err := cfg.Save(cfg.Path()); err != nil {
+			p := cfg.Profiles[args[0]]
+			if host != nil || len(addSuffix)+len(rmSuffix) > 0 {
+				if cfg.FromApp() {
+					if _, err := cfg.EditInApp("/profiles/set", tsmux.ProfileEdit{
+						Name: args[0], Hostname: host, AddSuffixes: addSuffix, RemoveSuffixes: rmSuffix,
+					}); err != nil {
+						return err
+					}
+				} else if err := cfg.Save(cfg.Path()); err != nil {
 					return err
 				}
 				if onlyConfigChanged(cmd) {
+					note := "applies when this profile's node next starts"
+					if cfg.FromApp() {
+						note = "applied; the app restarted its tailnets"
+					}
 					emit(map[string]any{"profile": args[0], "hostname": p.Hostname,
-						"suffixes": p.Suffixes,
-						"note":     "applies when this profile's node next starts"},
+						"suffixes": p.Suffixes, "note": note},
 						func() {
-							fmt.Printf("%s: %s · %s (applies on next start)\n",
-								args[0], p.Hostname, strings.Join(p.Suffixes, " "))
+							fmt.Printf("%s: %s · %s (%s)\n",
+								args[0], p.Hostname, strings.Join(p.Suffixes, " "), note)
 						})
 					return nil
 				}

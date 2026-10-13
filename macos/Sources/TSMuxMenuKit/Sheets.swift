@@ -93,8 +93,8 @@ struct DNSSheet: View {
           }
           Text(
             "Routing sends these to this tailnet. Most setups need none, and the "
-              + "search domain above is learned automatically. Edit them in "
-              + "config.yaml under Advanced."
+              + "search domain above is learned automatically. Change them with "
+              + "`tsmux profile set --add-suffix` or `--remove-suffix`."
           )
           .font(.footnote)
           .foregroundStyle(.secondary)
