@@ -190,6 +190,19 @@ final class TunnelModel {
     }
   }
 
+  /// Returns the error rather than raising the alert, so a suffix another
+  /// tailnet holds shows next to the field that asked for it.
+  func setSuffixes(_ profile: String, add: [String] = [], remove: [String] = []) async -> String? {
+    do {
+      _ = try await send(.setProfile(profile, addSuffixes: add, removeSuffixes: remove))
+        .decode(ProfileEditResult.self)
+    } catch {
+      return error.localizedDescription
+    }
+    await refresh()
+    return nil
+  }
+
   /// A drag in the list, in `onMove` terms. Shown at once: the tunnel
   /// restarts its tailnets to apply the new order.
   func move(from source: IndexSet, to destination: Int) async {

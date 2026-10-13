@@ -61,6 +61,20 @@ public struct TunnelRequest: Codable, Sendable, Equatable {
       body: try json(RouteIPChange(profile: profile, target: target, on: on)))
   }
 
+  /// Changes a tailnet's device name or the suffixes it claims; the same edit
+  /// as `tsmux profile set`. A suffix another tailnet holds is refused.
+  public static func setProfile(
+    _ name: String, hostname: String? = nil, addSuffixes: [String]? = nil,
+    removeSuffixes: [String]? = nil
+  ) throws -> TunnelRequest {
+    TunnelRequest(
+      method: "POST", path: "/profiles/set",
+      body: try json(
+        ProfileEdit(
+          name: name, hostname: hostname, addSuffixes: addSuffixes,
+          removeSuffixes: removeSuffixes)))
+  }
+
   public static func removeProfile(_ name: String) throws -> TunnelRequest {
     TunnelRequest(method: "POST", path: "/profiles/remove", body: try json(ProfileEdit(name: name)))
   }
@@ -164,12 +178,17 @@ struct ProfileEdit: Codable, Sendable {
   var controlURL: String?
   var newName: String?
   var index: Int?
+  var hostname: String?
+  var addSuffixes: [String]?
+  var removeSuffixes: [String]?
 
   enum CodingKeys: String, CodingKey {
-    case name, index
+    case name, index, hostname
     case displayName = "display_name"
     case controlURL = "control_url"
     case newName = "new_name"
+    case addSuffixes = "add_suffixes"
+    case removeSuffixes = "remove_suffixes"
   }
 }
 

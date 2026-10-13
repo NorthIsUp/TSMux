@@ -7,6 +7,8 @@ struct TailnetView: View {
   @Environment(\.dismiss) private var dismiss
   @State private var confirmRemove = false
   @State private var signIn: URL?
+  @State private var newSuffix = ""
+  @State private var suffixError: String?
 
   var body: some View {
     if let t = model.tailnet(profile) {
@@ -86,6 +88,8 @@ struct TailnetView: View {
         }
       }
 
+      suffixes(t)
+
       if !(t.devices ?? []).isEmpty || !(t.services ?? []).isEmpty {
         Section {
           NavigationLink("Devices (\(t.devices?.count ?? 0))") { DevicesView(profile: profile) }
@@ -117,6 +121,41 @@ struct TailnetView: View {
       }
     } message: {
       Text("This device leaves the tailnet and its sign-in is deleted.")
+    }
+  }
+
+  private func suffixes(_ t: ProfileStatus) -> some View {
+    Section {
+      ForEach(t.extraSuffixes, id: \.self) { s in
+        Text(s).font(.system(.body, design: .monospaced))
+      }
+      .onDelete { rows in
+        let gone = rows.map { t.extraSuffixes[$0] }
+        Task { suffixError = await model.setSuffixes(profile, remove: gone) }
+      }
+      HStack {
+        TextField("Suffix", text: $newSuffix, prompt: Text(".example.com"))
+          .font(.system(.body, design: .monospaced))
+          .urlEntry()
+          .autocorrectionDisabled()
+          .onSubmit(addSuffix)
+        Button("Add", action: addSuffix)
+          .disabled(newSuffix.trimmingCharacters(in: .whitespaces).isEmpty)
+      }
+      if let suffixError { Text(suffixError).foregroundStyle(.red) }
+    } header: {
+      Text("Extra suffixes")
+    } footer: {
+      Text("Names under these suffixes go to this tailnet, in browsers too.")
+    }
+  }
+
+  private func addSuffix() {
+    let s = newSuffix.trimmingCharacters(in: .whitespaces)
+    guard !s.isEmpty else { return }
+    Task {
+      suffixError = await model.setSuffixes(profile, add: [s])
+      if suffixError == nil { newSuffix = "" }
     }
   }
 

@@ -218,7 +218,20 @@
     }
 
     func setHostname(_ key: String, _ name: String) async -> Result<Void, CLIError> {
-      .failure(CLIError(message: "Renaming the device isn't available in this version."))
+      await call {
+        _ = try await self.tunnel.send(.setProfile(key, hostname: name))
+          .decode(ProfileEditResult.self)
+      }
+    }
+
+    func setSuffixes(_ key: String, add: [String], remove: [String]) async
+      -> Result<Void, CLIError>
+    {
+      await call {
+        _ = try await self.tunnel.send(
+          .setProfile(key, addSuffixes: add, removeSuffixes: remove)
+        ).decode(ProfileEditResult.self)
+      }
     }
 
     func doctor() async -> Result<DoctorReport, CLIError> {
