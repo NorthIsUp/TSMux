@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Rebuild TSMux.app, install it in /Applications and relaunch it"
+#MISE description="Rebuild TSMux.app, notarize it, install it in /Applications and relaunch it"
 #MISE sources=["main.go", "internal/**/*.go", "mobile/**/*.go", "macos/Sources/**/*.swift", "macos/Package.swift", "TSMuxKit/Sources/**/*.swift", "ios/App/**/*.swift", "ios/Direct/**/*.swift", "ios/Tunnel/**/*.swift", "ios/DirectTunnel/**/*.swift", "ios/project.yml", "scripts/build-app.sh"]
 set -euo pipefail
 
@@ -8,6 +8,16 @@ set -euo pipefail
 DEST=/Applications/TSMux.app
 version="$(tr -d '[:space:]' < VERSION).$(date -u +%Y%m%d%H%M%S)"
 BUILD_VERSION="$version" ./scripts/build-app.sh >/dev/null
+
+# sysextd rejects an unnotarized replacement ("code signature invalid").
+key=${ASC_KEY_ID:-238ATU74S4}
+zip="$(mktemp -d)/TSMux.zip"
+ditto -c -k --keepParent bin/TSMux.app "$zip"
+xcrun notarytool submit "$zip" --wait \
+  --key ~/.appstoreconnect/private_keys/AuthKey_$key.p8 --key-id "$key" \
+  --issuer "${ASC_ISSUER_ID:-98c62465-9650-49ec-afe4-23318e5c1ae1}" | grep -q "status: Accepted" ||
+  { echo "notarization was not accepted" >&2; exit 1; }
+xcrun stapler staple -q bin/TSMux.app
 
 if pgrep -f "$DEST/Contents/MacOS" >/dev/null 2>&1; then
   osascript -e 'tell application id "dev.northisup.tsmux.menu" to quit' >/dev/null 2>&1 ||
