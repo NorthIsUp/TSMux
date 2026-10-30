@@ -372,42 +372,52 @@ func cerr(err error) *C.char {
 	return C.CString(err.Error())
 }
 
-var tunOnce sync.Once
+var (
+	tunMu      sync.Mutex
+	tunServing bool
+)
 
-// attachTUN starts serving the packets the OS routes into the tunnel, once
-// per process: the utun outlives the Manager a config edit replaces.
-func attachTUN() (err error) {
-	tunOnce.Do(func() {
-		var f *os.File
-		if f, err = utunFile(); err != nil {
-			return
-		}
-		var dev tun.Device
-		if dev, err = tun.CreateTUNFromFile(f, 1280); err != nil {
-			return
-		}
-		h := tsmux.TunnelHandlers{
-			Dial: func(ctx context.Context, network string, dst netip.AddrPort) (net.Conn, error) {
-				m, err := current()
-				if err != nil {
-					return nil, err
-				}
-				return m.TunnelDial(ctx, network, dst)
-			},
-			DNS: func(ctx context.Context, q []byte) ([]byte, error) {
-				m, err := current()
-				if err != nil {
-					return nil, err
-				}
-				return m.TunnelDNS(ctx, q)
-			},
-		}
-		go func() { log.Printf("tun: stopped: %v", tsmux.ServeTUN(context.Background(), dev, h)) }()
-	})
-	if err != nil {
-		tunOnce = sync.Once{}
+// attachTUN starts serving the packets the OS routes into the tunnel. It
+// outlives the Manager a config edit replaces, and the next call after the
+// utun goes away (a stop and restart in a reused process) attaches the new one.
+func attachTUN() error {
+	tunMu.Lock()
+	defer tunMu.Unlock()
+	if tunServing {
+		return nil
 	}
-	return err
+	f, err := utunFile()
+	if err != nil {
+		return err
+	}
+	dev, err := tun.CreateTUNFromFile(f, 1280)
+	if err != nil {
+		return err
+	}
+	h := tsmux.TunnelHandlers{
+		Dial: func(ctx context.Context, network string, dst netip.AddrPort) (net.Conn, error) {
+			m, err := current()
+			if err != nil {
+				return nil, err
+			}
+			return m.TunnelDial(ctx, network, dst)
+		},
+		DNS: func(ctx context.Context, q []byte) ([]byte, error) {
+			m, err := current()
+			if err != nil {
+				return nil, err
+			}
+			return m.TunnelDNS(ctx, q)
+		},
+	}
+	tunServing = true
+	go func() {
+		log.Printf("tun: stopped: %v", tsmux.ServeTUN(context.Background(), dev, h))
+		tunMu.Lock()
+		tunServing = false
+		tunMu.Unlock()
+	}()
+	return nil
 }
 
 func current() (*tsmux.Manager, error) {
