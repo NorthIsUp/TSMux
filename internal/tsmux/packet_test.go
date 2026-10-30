@@ -96,18 +96,34 @@ func TestServeTUN(t *testing.T) {
 
 func TestTunnelDNSRefusesUnclaimed(t *testing.T) {
 	m := NewManager(tempConfig(t, twoProfiles), false)
+	if h := tunnelDNS(t, m, "example.com.", dnsmessage.TypeA); h.ID != 7 || h.RCode != dnsmessage.RCodeRefused {
+		t.Fatalf("reply = %+v; want REFUSED with ID 7", h)
+	}
+}
+
+// LocalAPI's dns-query takes only named types; others get no records.
+func TestTunnelDNSUnnamedType(t *testing.T) {
+	m := NewManager(tempConfig(t, twoProfiles), false)
+	if h := tunnelDNS(t, m, "db.tailnet-ab.ts.net.", dnsmessage.Type(99)); h.RCode != dnsmessage.RCodeSuccess {
+		t.Fatalf("reply = %+v; want an empty NOERROR", h)
+	}
+}
+
+func tunnelDNS(t *testing.T, m *Manager, name string, typ dnsmessage.Type) dnsmessage.Header {
+	t.Helper()
 	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 7})
 	b.StartQuestions()
-	b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName("example.com."), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
+	b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: typ, Class: dnsmessage.ClassINET})
 	q, _ := b.Finish()
 	raw, err := m.TunnelDNS(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var msg dnsmessage.Message
-	if err := msg.Unpack(raw); err != nil || msg.ID != 7 || msg.RCode != dnsmessage.RCodeRefused {
-		t.Fatalf("reply = %+v, %v; want REFUSED with ID 7", msg.Header, err)
+	if err := msg.Unpack(raw); err != nil {
+		t.Fatal(err)
 	}
+	return msg.Header
 }
 
 func fullAddr(ap netip.AddrPort) tcpip.FullAddress {

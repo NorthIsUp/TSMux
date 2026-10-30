@@ -171,7 +171,9 @@ func (m *Manager) TunnelDNS(ctx context.Context, query []byte) ([]byte, error) {
 	}
 	// shortcut: the tunnel carries IPv4 only, so AAAA answers would send
 	// clients to addresses it can't reach; add an IPv6 route to lift this.
-	if q.Type == dnsmessage.TypeAAAA {
+	// LocalAPI's dns-query takes a type by name, and a number has none.
+	qtype, named := strings.CutPrefix(q.Type.String(), "Type")
+	if q.Type == dnsmessage.TypeAAAA || !named {
 		return reply(dnsmessage.RCodeSuccess)
 	}
 	n, err := m.Node(prof.Name)
@@ -182,7 +184,7 @@ func (m *Manager) TunnelDNS(ctx context.Context, query []byte) ([]byte, error) {
 	if err != nil {
 		return reply(dnsmessage.RCodeServerFailure)
 	}
-	raw, _, err := lc.QueryDNS(ctx, host, q.Type.String()[len("Type"):])
+	raw, _, err := lc.QueryDNS(ctx, host, qtype)
 	if err != nil || len(raw) < 2 {
 		return reply(dnsmessage.RCodeServerFailure)
 	}
