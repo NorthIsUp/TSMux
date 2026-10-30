@@ -60,7 +60,7 @@ type TunnelRoute struct {
 // already carry, and the tailnet's resolver would not answer it.
 func (m *Manager) TunnelSettings() TunnelSettings {
 	m.mu.RLock()
-	var domains []string
+	domains := []string{} // [] rather than null: the app decodes a non-optional array
 	for _, n := range m.nodes {
 		if s, _ := n.learned(); s != "" {
 			domains = append(domains, strings.Trim(s, "."))

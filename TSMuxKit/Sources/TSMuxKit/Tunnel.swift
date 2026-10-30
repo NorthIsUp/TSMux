@@ -120,7 +120,7 @@ public struct TunnelSettings: Codable, Sendable, Equatable {
   }
   public let address: String
   public let dnsServer: String
-  public let matchDomains: [String]?
+  public let matchDomains: [String]
   public let routes: [Route]
 
   enum CodingKeys: String, CodingKey {

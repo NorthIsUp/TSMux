@@ -10,7 +10,6 @@ import TSMuxKit
 // The superclass isn't Sendable; this class's own state is all behind Mutex.
 final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
   private let applied = Mutex("")
-  private let attached = Mutex(false)
   private let pacWatch = Mutex<Task<Void, Never>?>(nil)
 
   nonisolated(nonsending) override func startTunnel(options: [String: NSObject]?) async throws {
@@ -50,6 +49,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
   }
 
   private func applySettings() async throws {
+    // The utun exists once settings are first applied, and the core attaches
+    // it once; until then, or after a failure, the next pass retries.
+    defer {
+      if let req = try? Self.encode(.attachTunnel) { _ = Self.call(req) }
+    }
     let pac = try JSONDecoder().decode(
       TunnelResponse.self, from: Data(Self.call(try Self.encode(.pac)).utf8)
     ).body
@@ -70,9 +74,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     }
     settings.ipv4Settings = ipv4
     // With no domains, a DNS server here would take every query on the system.
-    if let domains = tunnel.matchDomains, !domains.isEmpty {
+    if !tunnel.matchDomains.isEmpty {
       let dns = NEDNSSettings(servers: [tunnel.dnsServer])
-      dns.matchDomains = domains
+      dns.matchDomains = tunnel.matchDomains
       settings.dnsSettings = dns
     }
     let proxy = NEProxySettings()
@@ -100,19 +104,6 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     } catch {
       applied.withLock { $0 = "" }
       throw error
-    }
-    // The utun exists once settings are applied; the core finds it itself.
-    let attach = attached.withLock { done in
-      defer { done = true }
-      return !done
-    }
-    // A failure keeps the proxies working; the next settings change retries.
-    if attach,
-      (try? JSONDecoder().decode(
-        TunnelResponse.self, from: Data(Self.call(try Self.encode(.attachTunnel)).utf8)))?.code
-        != 200
-    {
-      attached.withLock { $0 = false }
     }
   }
 
