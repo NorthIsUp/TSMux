@@ -4,14 +4,18 @@
 # user clearing a quarantine flag by hand.
 #
 # Run after scripts/build-app.sh.
-# usage: devid.sh [--sign-only] [app]
+# usage: devid.sh [--sign-only | --app-only] [app]
 #   --sign-only: verify the signature, then stop. PRs use it to prove signing
 #   without waiting on notarization.
+#   --app-only: notarize and staple the app, skip the dmg (mise run dev).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SIGN_ONLY=
-[ "${1:-}" = --sign-only ] && { SIGN_ONLY=1; shift; }
+SIGN_ONLY= APP_ONLY=
+case "${1:-}" in
+  --sign-only) SIGN_ONLY=1; shift ;;
+  --app-only) APP_ONLY=1; shift ;;
+esac
 
 : "${ASC_KEY_ID:=238ATU74S4}"
 : "${ASC_ISSUER_ID:=98c62465-9650-49ec-afe4-23318e5c1ae1}"
@@ -26,9 +30,13 @@ DMG="bin/TSMux-$VERSION.dmg"
 [ -d "$APP" ] || { echo "no $APP — run scripts/build-app.sh first" >&2; exit 1; }
 [ -n "$SIGN_ONLY" ] || [ -f "$ASC_KEY_PATH" ] || { echo "no ASC key at $ASC_KEY_PATH" >&2; exit 1; }
 
+# notarytool can exit 0 on a rejected submission, so check the status it prints.
 notarize() {
-  xcrun notarytool submit "$1" --wait \
-    --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID"
+  local out
+  out=$(xcrun notarytool submit "$1" --wait \
+    --key "$ASC_KEY_PATH" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" 2>&1) || true
+  grep -q "status: Accepted" <<<"$out" || { echo "$out" >&2; echo "notarization of $1 was not accepted" >&2; exit 1; }
+  echo "$out"
 }
 
 # scripts/build-app.sh exported the app already signed: Xcode signs the system
@@ -36,7 +44,10 @@ notarize() {
 # signing again here would strip them.
 echo "==> checking the Developer ID signature"
 codesign --verify --deep --strict "$APP"
-codesign -dvv "$APP" 2>&1 | grep -q "^Authority=Developer ID Application" ||
+# Captured, not piped: grep -q quits on its match, and under pipefail
+# codesign's SIGPIPE fails the check.
+sig=$(codesign -dvv "$APP" 2>&1)
+grep -q "^Authority=Developer ID Application" <<<"$sig" ||
   { echo "$APP is not Developer ID signed" >&2; exit 1; }
 [ -z "$SIGN_ONLY" ] || { echo "signed $APP (not notarized)"; exit 0; }
 
@@ -46,6 +57,7 @@ echo "==> notarizing the app"
 rm -f "$ZIP"; ditto -c -k --keepParent "$APP" "$ZIP"
 notarize "$ZIP"
 xcrun stapler staple "$APP"
+[ -z "$APP_ONLY" ] || { rm -f "$ZIP"; echo "notarized $APP"; exit 0; }
 rm -f "$ZIP"; ditto -c -k --keepParent "$APP" "$ZIP"
 
 echo "==> building + notarizing the dmg"
