@@ -89,26 +89,17 @@ func (c *Config) RouteAddr(ip netip.Addr) (*Profile, error) {
 	ip = ip.Unmap()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, r := range c.ipRulesLocked() {
-		if r.pfx.Contains(ip) {
-			return r.profile, nil
-		}
+	if r, ok := c.ipRuleLocked(ip); ok {
+		return r.profile, nil
 	}
-	var owners []string
-	var owner *Profile
-	for _, p := range c.sorted {
-		if slices.Contains(p.peers, ip) {
-			owner = p
-			owners = append(owners, p.Name)
-		}
-	}
-	switch len(owners) {
+	switch owners := c.peerOwnersLocked([]netip.Addr{ip}); len(owners) {
 	case 0:
 		return nil, fmt.Errorf("%s: no running tailnet has this address", ip)
 	case 1:
-		return owner, nil
+		return owners[0], nil
+	default:
+		return nil, fmt.Errorf("%s: ambiguous, a peer in %s; turn on routing for it in one (tsmux profile route-ip)", ip, profileNames(owners))
 	}
-	return nil, fmt.Errorf("%s: ambiguous, a peer in %s; turn on routing for it in one (tsmux profile route-ip)", ip, strings.Join(owners, ", "))
 }
 
 // suffixOwner is Route's suffix match alone: a query only reaches the tunnel's
@@ -117,12 +108,8 @@ func (c *Config) RouteAddr(ip netip.Addr) (*Profile, error) {
 func (c *Config) suffixOwner(host string) *Profile {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for _, r := range c.domainRulesLocked() {
-		if strings.HasSuffix(host, r.suffix) || host == strings.TrimPrefix(r.suffix, ".") {
-			return r.profile
-		}
-	}
-	return nil
+	r, _ := c.domainRuleLocked(host)
+	return r.profile
 }
 
 // TunnelHandlers is what ServeTUN needs from the running tailnets. Both look

@@ -44,10 +44,8 @@ func (c *Config) Route(hostport string) (*Match, error) {
 	defer c.mu.RUnlock()
 
 	if ip, err := netip.ParseAddr(host); err == nil {
-		for _, r := range c.ipRulesLocked() {
-			if r.pfx.Contains(ip) {
-				return &Match{r.profile, r.kind + " " + r.pfx.String()}, nil
-			}
+		if r, ok := c.ipRuleLocked(ip); ok {
+			return &Match{r.profile, r.kind + " " + r.pfx.String()}, nil
 		}
 		if exit := c.exitProfileLocked(); exit != nil && exitCarriesIP(ip, c.exit.AllowLAN) {
 			return &Match{exit, "ip literal to " + exit.Name + " exit node"}, nil
@@ -58,11 +56,8 @@ func (c *Config) Route(hostport string) (*Match, error) {
 		return c.fallback(host, "ip literal")
 	}
 
-	for _, r := range c.domainRulesLocked() {
-		// ".foo.ts.net" matches both "a.foo.ts.net" and bare "foo.ts.net".
-		if strings.HasSuffix(host, r.suffix) || host == strings.TrimPrefix(r.suffix, ".") {
-			return &Match{r.profile, r.kind + " " + r.suffix}, nil
-		}
+	if r, ok := c.domainRuleLocked(host); ok {
+		return &Match{r.profile, r.kind + " " + r.suffix}, nil
 	}
 
 	if !strings.Contains(host, ".") {
@@ -170,21 +165,33 @@ func (c *Config) routeByPeers(host string) (*Match, error) {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	var names []string
-	var owner *Profile
-	for _, p := range c.sorted {
-		if !slices.ContainsFunc(addrs, func(a netip.Addr) bool { return !slices.Contains(p.peers, a.Unmap()) }) {
-			owner = p
-			names = append(names, p.Name)
-		}
-	}
-	switch len(names) {
+	switch owners := c.peerOwnersLocked(addrs); len(owners) {
 	case 0:
 		return nil, nil
 	case 1:
-		return &Match{owner, "resolves to " + addrs[0].Unmap().String() + ", a peer"}, nil
+		return &Match{owners[0], "resolves to " + addrs[0].Unmap().String() + ", a peer"}, nil
+	default:
+		return nil, fmt.Errorf("%s: ambiguous, resolves to peers in %s; claim it with a suffix (tsmux profile set --add-suffix)", host, profileNames(owners))
 	}
-	return nil, fmt.Errorf("%s: ambiguous, resolves to peers in %s; claim it with a suffix (tsmux profile set --add-suffix)", host, strings.Join(names, ", "))
+}
+
+// peerOwnersLocked lists the tailnets where every one of addrs is a peer.
+func (c *Config) peerOwnersLocked(addrs []netip.Addr) []*Profile {
+	var out []*Profile
+	for _, p := range c.sorted {
+		if !slices.ContainsFunc(addrs, func(a netip.Addr) bool { return !slices.Contains(p.peers, a.Unmap()) }) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func profileNames(ps []*Profile) string {
+	names := make([]string, len(ps))
+	for i, p := range ps {
+		names[i] = p.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 func (c *Config) fallback(host, why string) (*Match, error) {
@@ -224,6 +231,27 @@ func (c *Config) domainRulesLocked() []domainRule {
 	}
 	slices.SortStableFunc(out, func(a, b domainRule) int { return len(b.suffix) - len(a.suffix) })
 	return out
+}
+
+// domainRuleLocked is the rule that claims host, if any.
+func (c *Config) domainRuleLocked(host string) (domainRule, bool) {
+	for _, r := range c.domainRulesLocked() {
+		// ".foo.ts.net" matches both "a.foo.ts.net" and bare "foo.ts.net".
+		if strings.HasSuffix(host, r.suffix) || host == strings.TrimPrefix(r.suffix, ".") {
+			return r, true
+		}
+	}
+	return domainRule{}, false
+}
+
+// ipRuleLocked is the rule that claims ip, if any.
+func (c *Config) ipRuleLocked(ip netip.Addr) (ipRule, bool) {
+	for _, r := range c.ipRulesLocked() {
+		if r.pfx.Contains(ip) {
+			return r, true
+		}
+	}
+	return ipRule{}, false
 }
 
 // ipRulesLocked is domainRulesLocked for IP literals: most specific prefix
