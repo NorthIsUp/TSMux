@@ -196,6 +196,8 @@ func (m *Manager) TunnelDNS(ctx context.Context, query []byte) ([]byte, error) {
 // the tunnel, in a userspace stack, and redials it through h. It returns when
 // ctx ends or the device fails.
 func ServeTUN(ctx context.Context, dev tun.Device, h TunnelHandlers) error {
+	// dev.Read blocks, so ending ctx has to close the device to stop it.
+	defer context.AfterFunc(ctx, func() { dev.Close() })()
 	s := stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
@@ -289,7 +291,7 @@ func ServeTUN(ctx context.Context, dev tun.Device, h TunnelHandlers) error {
 		if b[0]>>4 == 6 {
 			proto = ipv6.ProtocolNumber
 		}
-		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(slices.Clone(b))})
+		pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(b)})
 		ep.InjectInbound(proto, pkt)
 		pkt.DecRef()
 	}

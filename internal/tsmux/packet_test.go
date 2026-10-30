@@ -64,7 +64,8 @@ func TestServeTUN(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go ServeTUN(ctx, dev, h)
+	served := make(chan error, 1)
+	go func() { served <- ServeTUN(ctx, dev, h) }()
 
 	dctx, dcancel := context.WithTimeout(ctx, 5*time.Second)
 	defer dcancel()
@@ -91,6 +92,13 @@ func TestServeTUN(t *testing.T) {
 	n, err := u.Read(got)
 	if err != nil || string(got[:n]) != "answer:q" {
 		t.Fatalf("dns reply = %q, %v", got[:n], err)
+	}
+
+	cancel()
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeTUN still running after ctx ended")
 	}
 }
 
