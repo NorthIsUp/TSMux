@@ -16,8 +16,10 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +30,7 @@ import (
 	"unsafe"
 
 	"github.com/NorthIsUp/tsmux/internal/tsmux"
+	"github.com/tailscale/wireguard-go/tun"
 )
 
 // memoryLimit keeps the Go heap well under the ~50 MB jetsam cap iOS puts on
@@ -146,6 +149,16 @@ func call(raw []byte) response {
 	defer mu.RUnlock()
 	if mgr == nil {
 		return errResponse(http.StatusServiceUnavailable, errors.New("tsmux is not running"))
+	}
+	switch req.Path {
+	case "/tunnel":
+		b, _ := json.Marshal(mgr.TunnelSettings())
+		return response{Code: http.StatusOK, Body: string(b)}
+	case "/tunnel/attach":
+		if err := attachTUN(); err != nil {
+			return errResponse(http.StatusInternalServerError, err)
+		}
+		return response{Code: http.StatusOK, Body: `{"ok":true}`}
 	}
 	if req.Path == "/cli" {
 		if apiToken == "" {
@@ -357,4 +370,61 @@ func cerr(err error) *C.char {
 		return nil
 	}
 	return C.CString(err.Error())
+}
+
+var (
+	tunMu      sync.Mutex
+	tunServing bool
+)
+
+// attachTUN starts serving the packets the OS routes into the tunnel. It
+// outlives the Manager a config edit replaces, and the next call after the
+// utun goes away (a stop and restart in a reused process) attaches the new one.
+func attachTUN() error {
+	tunMu.Lock()
+	defer tunMu.Unlock()
+	if tunServing {
+		return nil
+	}
+	f, err := utunFile()
+	if err != nil {
+		return err
+	}
+	dev, err := tun.CreateTUNFromFile(f, 1280)
+	if err != nil {
+		return err
+	}
+	h := tsmux.TunnelHandlers{
+		Dial: func(ctx context.Context, network string, dst netip.AddrPort) (net.Conn, error) {
+			m, err := current()
+			if err != nil {
+				return nil, err
+			}
+			return m.TunnelDial(ctx, network, dst)
+		},
+		DNS: func(ctx context.Context, q []byte) ([]byte, error) {
+			m, err := current()
+			if err != nil {
+				return nil, err
+			}
+			return m.TunnelDNS(ctx, q)
+		},
+	}
+	tunServing = true
+	go func() {
+		log.Printf("tun: stopped: %v", tsmux.ServeTUN(context.Background(), dev, h))
+		tunMu.Lock()
+		tunServing = false
+		tunMu.Unlock()
+	}()
+	return nil
+}
+
+func current() (*tsmux.Manager, error) {
+	mu.RLock()
+	defer mu.RUnlock()
+	if mgr == nil {
+		return nil, errors.New("tsmux is not running")
+	}
+	return mgr, nil
 }
