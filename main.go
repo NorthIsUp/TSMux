@@ -857,6 +857,8 @@ func proxyEnv(cfg *tsmux.Config) []string {
 		"HTTPS_PROXY=" + http, "https_proxy=" + http,
 		"ALL_PROXY=" + socks, "all_proxy=" + socks,
 		"NO_PROXY=localhost,127.0.0.1,::1", "no_proxy=localhost,127.0.0.1,::1",
+		// Node's built-in fetch ignores the proxy vars without it (Node 24+).
+		"NODE_USE_ENV_PROXY=1",
 	}
 }
 
