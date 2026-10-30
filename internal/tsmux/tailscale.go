@@ -1,6 +1,7 @@
 package tsmux
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -29,16 +30,25 @@ func (m *Manager) localAPIProxy(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
-	(&httputil.ReverseProxy{
+	localAPIReverseProxy(rest, lc.Dial).ServeHTTP(w, r)
+}
+
+func localAPIReverseProxy(rest string, dial func(ctx context.Context, network, addr string) (net.Conn, error)) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme, pr.Out.URL.Host = "http", apitype.LocalAPIHost
 			pr.Out.URL.Path, pr.Out.URL.RawPath = "/"+rest, ""
 			pr.Out.Host = apitype.LocalAPIHost
 			pr.Out.Header.Del(tokenHeader)
+			// ReverseProxy sends "Connection: Upgrade", and the LocalAPI's
+			// ts-dial check (`tailscale nc`) only matches lowercase.
+			if pr.Out.Header.Get("Upgrade") != "" {
+				pr.Out.Header.Set("Connection", "upgrade")
+			}
 		},
-		Transport:     &http.Transport{DialContext: lc.Dial, DisableKeepAlives: true},
+		Transport:     &http.Transport{DialContext: dial, DisableKeepAlives: true},
 		FlushInterval: -1,
-	}).ServeHTTP(w, r)
+	}
 }
 
 // TailscaleSocket serves a unix socket for the tailscale CLI's --socket that

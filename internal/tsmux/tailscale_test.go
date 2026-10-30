@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"tailscale.com/client/local"
 )
 
 // The bridge must swap whatever Authorization the CLI sent (the Tailscale
@@ -66,5 +68,49 @@ func TestLocalAPIProxyGuards(t *testing.T) {
 		if w := get(t, h, p); w.Code != http.StatusNotFound {
 			t.Errorf("%s: %d, want 404", p, w.Code)
 		}
+	}
+}
+
+// `tailscale nc` dials through the LocalAPI's ts-dial upgrade, which must
+// survive both proxy hops and the LocalAPI's lowercase-only Connection check.
+func TestTailscaleSocketDialUpgrade(t *testing.T) {
+	localAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Connection"), "upgrade") || r.Header.Get("Upgrade") != "ts-dial" {
+			http.Error(w, "bad ts-dial upgrade", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Upgrade", "ts-dial")
+		w.Header().Set("Connection", "upgrade")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+		conn, brw, _ := w.(http.Hijacker).Hijack()
+		defer conn.Close()
+		brw.Flush()
+		io.Copy(conn, brw)
+	}))
+	defer localAPI.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		localAPIReverseProxy("localapi/v0/dial", func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp", localAPI.Listener.Addr().String())
+		}).ServeHTTP(w, r)
+	}))
+	defer api.Close()
+	cfg := Default()
+	cfg.Router.PACListen = strings.TrimPrefix(api.URL, "http://")
+	cfg.apiToken = testToken
+	sock, stop, err := cfg.TailscaleSocket("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	conn, err := (&local.Client{Socket: sock, UseSocketOnly: true}).UserDial(context.Background(), "tcp", "peer", 443)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	io.WriteString(conn, "ping")
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("echo = %q, %v", buf, err)
 	}
 }
