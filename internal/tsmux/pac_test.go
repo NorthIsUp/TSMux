@@ -77,9 +77,9 @@ func pacCfg(t *testing.T) *Config {
 func TestPACRoutesLikeTheRouter(t *testing.T) {
 	c := pacCfg(t)
 	const (
-		corp = "PROXY 127.0.0.1:43110; SOCKS5 127.0.0.1:43111"
-		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
-		work = "PROXY 127.0.0.1:43130; SOCKS5 127.0.0.1:43131"
+		corp = "PROXY 127.0.0.1:43110"
+		home = "PROXY 127.0.0.1:43120"
+		work = "PROXY 127.0.0.1:43130"
 	)
 	cases := []struct{ host, want string }{
 		{"box.work.ts.net", work},
@@ -142,7 +142,7 @@ func TestPACPicksUpLearnedSuffix(t *testing.T) {
 	c := pacCfg(t)
 	c.addSuffix("home", ".tailnet-ab.ts.net")
 	got := runPAC(t, c, []string{"nas.tailnet-ab.ts.net"})
-	if want := "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"; got[0] != want {
+	if want := "PROXY 127.0.0.1:43120"; got[0] != want {
 		t.Errorf("got %q, want %q", got[0], want)
 	}
 }
@@ -156,8 +156,8 @@ func TestPACLearnedDomainsAndRoutes(t *testing.T) {
 	c.setLearned("corp", []string{".example.com"}, []netip.Prefix{pfx("10.0.0.0/8"), pfx("fd7a:1::/48")})
 	c.setLearned("home", []string{".git.example.com"}, []netip.Prefix{pfx("10.1.0.0/16")})
 	const (
-		corp = "PROXY 127.0.0.1:43110; SOCKS5 127.0.0.1:43111"
-		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
+		corp = "PROXY 127.0.0.1:43110"
+		home = "PROXY 127.0.0.1:43120"
 	)
 	cases := []struct{ host, want string }{
 		{"wiki.example.com", corp},
@@ -207,8 +207,8 @@ func TestPACLearnedDomainsAndRoutes(t *testing.T) {
 // or the exit node the user picked carries nothing.
 func TestPACExitNode(t *testing.T) {
 	const (
-		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
-		work = "PROXY 127.0.0.1:43130; SOCKS5 127.0.0.1:43131"
+		home = "PROXY 127.0.0.1:43120"
+		work = "PROXY 127.0.0.1:43130"
 	)
 	for _, tc := range []struct {
 		name  string
@@ -290,8 +290,8 @@ func TestPACExitNode(t *testing.T) {
 // private subnet off its tailnet.
 func TestPACLearnedBeatsExitNode(t *testing.T) {
 	const (
-		corp = "PROXY 127.0.0.1:43110; SOCKS5 127.0.0.1:43111"
-		home = "PROXY 127.0.0.1:43120; SOCKS5 127.0.0.1:43121"
+		corp = "PROXY 127.0.0.1:43110"
+		home = "PROXY 127.0.0.1:43120"
 	)
 	for _, lan := range []bool{false, true} {
 		c := pacCfg(t)

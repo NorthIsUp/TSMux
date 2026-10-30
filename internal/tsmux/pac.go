@@ -84,8 +84,11 @@ func writeIPv4Direct(b *strings.Builder, pfxs []netip.Prefix) {
 	}
 }
 
+// pacProxy names one proxy, no fallback: a browser whose proxy connection
+// drops after the request went out resends it to the next entry, and that
+// replay breaks one-time URLs such as OAuth callbacks.
 func pacProxy(p *Profile) string {
-	return fmt.Sprintf("PROXY 127.0.0.1:%d; SOCKS5 127.0.0.1:%d", p.HTTPPort, p.SOCKSPort)
+	return fmt.Sprintf("PROXY 127.0.0.1:%d", p.HTTPPort)
 }
 
 func cidrToPAC(cidr string) (ip, mask string, ok bool) {
