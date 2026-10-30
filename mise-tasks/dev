@@ -13,10 +13,10 @@ BUILD_VERSION="$version" ./scripts/build-app.sh >/dev/null
 key=${ASC_KEY_ID:-238ATU74S4}
 zip="$(mktemp -d)/TSMux.zip"
 ditto -c -k --keepParent bin/TSMux.app "$zip"
-xcrun notarytool submit "$zip" --wait \
+out=$(xcrun notarytool submit "$zip" --wait \
   --key ~/.appstoreconnect/private_keys/AuthKey_$key.p8 --key-id "$key" \
-  --issuer "${ASC_ISSUER_ID:-98c62465-9650-49ec-afe4-23318e5c1ae1}" | grep -q "status: Accepted" ||
-  { echo "notarization was not accepted" >&2; exit 1; }
+  --issuer "${ASC_ISSUER_ID:-98c62465-9650-49ec-afe4-23318e5c1ae1}" 2>&1)
+grep -q "status: Accepted" <<<"$out" || { echo "$out" >&2; echo "notarization was not accepted" >&2; exit 1; }
 xcrun stapler staple -q bin/TSMux.app
 
 if pgrep -f "$DEST/Contents/MacOS" >/dev/null 2>&1; then
