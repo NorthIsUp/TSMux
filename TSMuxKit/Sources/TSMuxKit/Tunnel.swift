@@ -18,6 +18,10 @@ public struct TunnelRequest: Codable, Sendable, Equatable {
   public static let pac = TunnelRequest(method: "GET", path: "/proxy.pac")
   /// Where the Mac extension serves the API for the bundled CLI.
   public static let cli = TunnelRequest(method: "GET", path: "/cli")
+  /// The routes and DNS the packet tunnel claims for every tailnet.
+  public static let tunnel = TunnelRequest(method: "GET", path: "/tunnel")
+  /// Starts serving the packets those routes send into the tunnel.
+  public static let attachTunnel = TunnelRequest(method: "POST", path: "/tunnel/attach")
 
   public static func prefs(_ p: PrefsChange) throws -> TunnelRequest {
     TunnelRequest(method: "POST", path: "/prefs", body: try json(p))
@@ -106,6 +110,24 @@ public struct TunnelResponse: Codable, Sendable {
 public struct CLIEndpoint: Codable, Sendable, Equatable {
   public let url: String
   public let token: String
+}
+
+/// The `/tunnel` reply (`internal/tsmux/packet.go`).
+public struct TunnelSettings: Codable, Sendable, Equatable {
+  public struct Route: Codable, Sendable, Equatable {
+    public let address: String
+    public let mask: String
+  }
+  public let address: String
+  public let dnsServer: String
+  public let matchDomains: [String]?
+  public let routes: [Route]
+
+  enum CodingKeys: String, CodingKey {
+    case address, routes
+    case dnsServer = "dns_server"
+    case matchDomains = "match_domains"
+  }
 }
 
 /// The body of a `/profiles/…` edit. `warning` is set when the edit went

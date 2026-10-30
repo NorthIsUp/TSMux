@@ -4,12 +4,13 @@ import Synchronization
 import TSMuxCore
 import TSMuxKit
 
-/// Runs every tailnet in this one process. No packets flow through the tunnel:
-/// it exists to keep the process alive and to carry the proxy settings, whose
-/// PAC sends each tailnet's names to that tailnet's loopback proxy.
+/// Runs every tailnet in this one process. The PAC sends each tailnet's names
+/// to its loopback proxy, and the tunnel's routes and DNS carry everything
+/// else bound for a tailnet, so tools that ignore proxies reach it too.
 // The superclass isn't Sendable; this class's own state is all behind Mutex.
 final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
-  private let appliedPAC = Mutex("")
+  private let applied = Mutex("")
+  private let attached = Mutex(false)
   private let pacWatch = Mutex<Task<Void, Never>?>(nil)
 
   nonisolated(nonsending) override func startTunnel(options: [String: NSObject]?) async throws {
@@ -52,16 +53,28 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     let pac = try JSONDecoder().decode(
       TunnelResponse.self, from: Data(Self.call(try Self.encode(.pac)).utf8)
     ).body
-    let changed = appliedPAC.withLock { applied in
-      defer { applied = pac }
-      return applied != pac
+    let tunnel = try JSONDecoder().decode(
+      TunnelResponse.self, from: Data(Self.call(try Self.encode(.tunnel)).utf8)
+    ).decode(TunnelSettings.self)
+    let key = pac + String(decoding: try JSONEncoder().encode(tunnel), as: UTF8.self)
+    let changed = applied.withLock { applied in
+      defer { applied = key }
+      return applied != key
     }
     guard changed else { return }
 
     let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-    // An address with no routes: the interface comes up, nothing is captured.
-    settings.ipv4Settings = NEIPv4Settings(
-      addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.255"])
+    let ipv4 = NEIPv4Settings(addresses: [tunnel.address], subnetMasks: ["255.255.255.255"])
+    ipv4.includedRoutes = tunnel.routes.map {
+      NEIPv4Route(destinationAddress: $0.address, subnetMask: $0.mask)
+    }
+    settings.ipv4Settings = ipv4
+    // With no domains, a DNS server here would take every query on the system.
+    if let domains = tunnel.matchDomains, !domains.isEmpty {
+      let dns = NEDNSSettings(servers: [tunnel.dnsServer])
+      dns.matchDomains = domains
+      settings.dnsSettings = dns
+    }
     let proxy = NEProxySettings()
     proxy.autoProxyConfigurationEnabled = true
     #if os(macOS)
@@ -85,8 +98,21 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
     do {
       try await setTunnelNetworkSettings(settings)
     } catch {
-      appliedPAC.withLock { $0 = "" }
+      applied.withLock { $0 = "" }
       throw error
+    }
+    // The utun exists once settings are applied; the core finds it itself.
+    let attach = attached.withLock { done in
+      defer { done = true }
+      return !done
+    }
+    // A failure keeps the proxies working; the next settings change retries.
+    if attach,
+      (try? JSONDecoder().decode(
+        TunnelResponse.self, from: Data(Self.call(try Self.encode(.attachTunnel)).utf8)))?.code
+        != 200
+    {
+      attached.withLock { $0 = false }
     }
   }
 
