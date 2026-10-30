@@ -70,7 +70,7 @@ if [ -n "${PR_TOKEN:-}" ]; then
   printf '%s' "$PR_TOKEN" | gh secret set PR_TOKEN --repo "$repo"
   echo "==> set PR_TOKEN"
 else
-  gh secret list --repo "$repo" | grep -q '^PR_TOKEN' \
+  grep -q '^PR_TOKEN' <<<"$(gh secret list --repo "$repo")" \
     || echo "note: PR_TOKEN not set and not in env — the daily update job will fail until it is" >&2
 fi
 

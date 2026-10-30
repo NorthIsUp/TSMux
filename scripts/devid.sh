@@ -44,7 +44,10 @@ notarize() {
 # signing again here would strip them.
 echo "==> checking the Developer ID signature"
 codesign --verify --deep --strict "$APP"
-codesign -dvv "$APP" 2>&1 | grep -q "^Authority=Developer ID Application" ||
+# Captured, not piped: grep -q quits on its match, and under pipefail
+# codesign's SIGPIPE fails the check.
+sig=$(codesign -dvv "$APP" 2>&1)
+grep -q "^Authority=Developer ID Application" <<<"$sig" ||
   { echo "$APP is not Developer ID signed" >&2; exit 1; }
 [ -z "$SIGN_ONLY" ] || { echo "signed $APP (not notarized)"; exit 0; }
 
