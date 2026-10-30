@@ -152,7 +152,7 @@ func call(raw []byte) response {
 	}
 	switch req.Path {
 	case "/tunnel":
-		b, _ := json.Marshal(cfg.TunnelSettings())
+		b, _ := json.Marshal(mgr.TunnelSettings())
 		return response{Code: http.StatusOK, Body: string(b)}
 	case "/tunnel/attach":
 		if err := attachTUN(); err != nil {

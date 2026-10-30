@@ -38,8 +38,10 @@ func TestRouteAddr(t *testing.T) {
 	if _, err := cfg.RouteAddr(netip.MustParseAddr("100.64.0.77")); err == nil {
 		t.Error("unknown address routed")
 	}
-	got := cfg.TunnelSettings()
-	if strings.Join(got.MatchDomains, ",") != "tailnet-ab.ts.net" || got.Routes[0] != (TunnelRoute{"100.64.0.0", "255.192.0.0"}) {
+	// A hand-added suffix stays out of the OS resolver; learned split DNS goes in.
+	cfg.setLearned("work", []string{".corp.example"}, nil)
+	got := NewManager(cfg, false).TunnelSettings()
+	if strings.Join(got.MatchDomains, ",") != "corp.example" || got.Routes[0] != (TunnelRoute{"100.64.0.0", "255.192.0.0"}) {
 		t.Errorf("TunnelSettings = %+v", got)
 	}
 }

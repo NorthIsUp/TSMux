@@ -54,13 +54,26 @@ type TunnelRoute struct {
 	Mask    string `json:"mask"`
 }
 
-func (c *Config) TunnelSettings() TunnelSettings {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+// TunnelSettings sends the OS resolver only the names a tailnet's own DNS
+// serves: its MagicDNS suffix and split-DNS domains. A suffix added by hand
+// (dagster.example.dev) resolves publicly to a 100.x peer, which the routes
+// already carry, and the tailnet's resolver would not answer it.
+func (m *Manager) TunnelSettings() TunnelSettings {
+	m.mu.RLock()
 	var domains []string
-	for _, r := range c.domainRulesLocked() {
-		domains = append(domains, strings.TrimPrefix(r.suffix, "."))
+	for _, n := range m.nodes {
+		if s, _ := n.learned(); s != "" {
+			domains = append(domains, strings.Trim(s, "."))
+		}
 	}
+	m.mu.RUnlock()
+	m.cfg.mu.RLock()
+	for _, p := range m.cfg.sorted {
+		for _, s := range p.learnedSuffixes {
+			domains = append(domains, strings.Trim(s, "."))
+		}
+	}
+	m.cfg.mu.RUnlock()
 	slices.Sort(domains)
 	var routes []TunnelRoute
 	for _, p := range TunnelRoutes {
