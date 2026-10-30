@@ -38,10 +38,17 @@ func TestRouteAddr(t *testing.T) {
 	if _, err := cfg.RouteAddr(netip.MustParseAddr("100.64.0.77")); err == nil {
 		t.Error("unknown address routed")
 	}
-	// A hand-added suffix stays out of the OS resolver; learned split DNS goes in.
+}
+
+// The OS resolver gets a node's MagicDNS suffix and learned split DNS, never
+// a hand-added suffix (the fixture's personal one).
+func TestTunnelSettings(t *testing.T) {
+	cfg := tempConfig(t, twoProfiles)
 	cfg.setLearned("work", []string{".corp.example"}, nil)
-	got := NewManager(cfg, false).TunnelSettings()
-	if strings.Join(got.MatchDomains, ",") != "corp.example" || got.Routes[0] != (TunnelRoute{"100.64.0.0", "255.192.0.0"}) {
+	m := NewManager(cfg, false)
+	m.nodes["work"] = &Node{suffix: ".tail1.ts.net"}
+	got := m.TunnelSettings()
+	if strings.Join(got.MatchDomains, ",") != "corp.example,tail1.ts.net" || got.Routes[0] != (TunnelRoute{"100.64.0.0", "255.192.0.0"}) {
 		t.Errorf("TunnelSettings = %+v", got)
 	}
 }

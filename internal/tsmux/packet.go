@@ -67,13 +67,7 @@ func (m *Manager) TunnelSettings() TunnelSettings {
 		}
 	}
 	m.mu.RUnlock()
-	m.cfg.mu.RLock()
-	for _, p := range m.cfg.sorted {
-		for _, s := range p.learnedSuffixes {
-			domains = append(domains, strings.Trim(s, "."))
-		}
-	}
-	m.cfg.mu.RUnlock()
+	domains = append(domains, m.cfg.learnedDomains()...)
 	slices.Sort(domains)
 	var routes []TunnelRoute
 	for _, p := range TunnelRoutes {

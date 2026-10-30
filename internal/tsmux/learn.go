@@ -232,6 +232,19 @@ func (c *Config) isSplitDNSName(profile, host string) bool {
 	})
 }
 
+// learnedDomains is every profile's split-DNS domains, no leading dot.
+func (c *Config) learnedDomains() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var out []string
+	for _, p := range c.sorted {
+		for _, d := range p.learnedSuffixes {
+			out = append(out, strings.TrimPrefix(d, "."))
+		}
+	}
+	return out
+}
+
 // LearnedOf reports the split-DNS domains (no leading dot) and subnet routes
 // a profile currently routes on top of its config.
 func (c *Config) LearnedOf(name string) (domains, routes []string) {
