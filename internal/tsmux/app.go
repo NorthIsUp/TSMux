@@ -1,16 +1,22 @@
 package tsmux
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
+	"golang.org/x/net/proxy"
 	"gopkg.in/yaml.v3"
+	"tailscale.com/client/local"
 )
 
 // AppEndpoint is how the CLI reaches the tailnets the TSMux Mac app runs in
@@ -88,6 +94,39 @@ func fetchAppConfig(ep AppEndpoint) (*Config, error) {
 
 // FromApp reports whether this config is the app's, read over its API.
 func (c *Config) FromApp() bool { return c.apiToken != "" }
+
+// AppDial reaches the app's tailnets through its loopback SOCKS5 proxies. Its
+// extension owns the nodes: their state dir isn't this process's to open, and
+// a second node on the same keys would fight the first. profile pins one
+// tailnet; "" lets the router pick from the hostname.
+func (c *Config) AppDial(profile string) (DialFunc, error) {
+	addr := c.Router.SOCKS5Proxy
+	if profile != "" {
+		p := c.Profiles[profile]
+		if p == nil {
+			return nil, fmt.Errorf("no profile named %q", profile)
+		}
+		addr = net.JoinHostPort("127.0.0.1", strconv.Itoa(p.SOCKSPort))
+	}
+	d, err := proxy.SOCKS5("tcp", addr, nil, proxy.Direct)
+	if err != nil {
+		return nil, err
+	}
+	return d.(proxy.ContextDialer).DialContext, nil
+}
+
+// AppResolve is Node.Resolve for a tailnet in the app's extension.
+func (c *Config) AppResolve(ctx context.Context, profile, host string) ([]net.IPAddr, error) {
+	sock, stop, err := c.TailscaleSocket(profile)
+	if err != nil {
+		return nil, err
+	}
+	defer stop()
+	lc := &local.Client{Socket: sock, UseSocketOnly: true}
+	return resolveWith(ctx, host, func(ctx context.Context, host, qtype string) ([]netip.Addr, error) {
+		return queryDNS(ctx, lc, host, qtype)
+	})
+}
 
 // configYAML serves the running config, so the CLI uses the app's ports.
 func (c *Config) configYAML(w http.ResponseWriter, _ *http.Request) {

@@ -922,17 +922,40 @@ func cmdRun() *cobra.Command {
 
 // withManager starts the tailnets, runs fn, and tears everything down. Used by
 // the one-shot commands so they work without a running `tsmux up`.
-func withManager(ctx context.Context, fn func(context.Context, *tsmux.Manager, *tsmux.Config) error) error {
-	cfg, err := load()
-	if err != nil {
-		return err
-	}
+func withManager(ctx context.Context, cfg *tsmux.Config, fn func(context.Context, *tsmux.Manager) error) error {
 	m := tsmux.NewManager(cfg, verbose)
 	if err := m.Start(ctx); err != nil {
 		return err
 	}
 	defer m.Close()
-	return fn(ctx, m, cfg)
+	return fn(ctx, m)
+}
+
+// withDial hands fn a way into the tailnets: through the app when it runs them,
+// else with nodes of this command's own. profile pins one tailnet; "" picks from
+// the hostname.
+func withDial(ctx context.Context, profile string, fn func(context.Context, tsmux.DialFunc) error) error {
+	cfg, err := load()
+	if err != nil {
+		return err
+	}
+	if cfg.FromApp() {
+		dial, err := cfg.AppDial(profile)
+		if err != nil {
+			return err
+		}
+		return fn(ctx, dial)
+	}
+	return withManager(ctx, cfg, func(ctx context.Context, m *tsmux.Manager) error {
+		if profile == "" {
+			return fn(ctx, m.Dial)
+		}
+		n, err := m.Node(profile)
+		if err != nil {
+			return err
+		}
+		return fn(ctx, n.Dial)
+	})
 }
 
 func cmdConnect() *cobra.Command {
@@ -940,9 +963,9 @@ func cmdConnect() *cobra.Command {
 		Use: "connect <host> <port>", Short: "Pipe stdin/stdout to a tailnet host (ssh ProxyCommand)",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withManager(cmd.Context(), func(ctx context.Context, m *tsmux.Manager, _ *tsmux.Config) error {
+			return withDial(cmd.Context(), "", func(ctx context.Context, dial tsmux.DialFunc) error {
 				target := net.JoinHostPort(args[0], args[1])
-				conn, err := m.Dial(ctx, "tcp", target)
+				conn, err := dial(ctx, "tcp", target)
 				if err != nil {
 					return err
 				}
@@ -959,15 +982,7 @@ func cmdTunnel() *cobra.Command {
 		Use: "tunnel <target-host:port>", Short: "Forward a loopback port into one tailnet",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withManager(cmd.Context(), func(ctx context.Context, m *tsmux.Manager, cfg *tsmux.Config) error {
-				dial := m.Dial
-				if profile != "" {
-					n, err := m.Node(profile)
-					if err != nil {
-						return err
-					}
-					dial = n.Dial
-				}
+			return withDial(cmd.Context(), profile, func(ctx context.Context, dial tsmux.DialFunc) error {
 				ln, err := net.Listen("tcp", listen)
 				if err != nil {
 					return err
@@ -994,7 +1009,32 @@ func cmdDNS() *cobra.Command {
 	c.AddCommand(&cobra.Command{
 		Use: "query <host>", Short: "Resolve a name inside its owning tailnet", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return withManager(cmd.Context(), func(ctx context.Context, m *tsmux.Manager, _ *tsmux.Config) error {
+			cfg, err := load()
+			if err != nil {
+				return err
+			}
+			report := func(profile string, ips []net.IPAddr) error {
+				addrs := make([]string, len(ips))
+				for i, ip := range ips {
+					addrs[i] = ip.String()
+				}
+				emit(map[string]any{"host": args[0], "profile": profile, "addrs": addrs}, func() {
+					fmt.Printf("%s [%s] -> %s\n", args[0], profile, strings.Join(addrs, " "))
+				})
+				return nil
+			}
+			if cfg.FromApp() {
+				match, err := cfg.FetchRoute(args[0])
+				if err != nil {
+					return err
+				}
+				ips, err := cfg.AppResolve(cmd.Context(), match.Profile.Name, tsmux.SplitHost(args[0]))
+				if err != nil {
+					return err
+				}
+				return report(match.Profile.Name, ips)
+			}
+			return withManager(cmd.Context(), cfg, func(ctx context.Context, m *tsmux.Manager) error {
 				n, match, err := m.Pick(args[0])
 				if err != nil {
 					return err
@@ -1003,14 +1043,7 @@ func cmdDNS() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				addrs := make([]string, len(ips))
-				for i, ip := range ips {
-					addrs[i] = ip.String()
-				}
-				emit(map[string]any{"host": args[0], "profile": match.Profile.Name, "addrs": addrs}, func() {
-					fmt.Printf("%s [%s] -> %s\n", args[0], match.Profile.Name, strings.Join(addrs, " "))
-				})
-				return nil
+				return report(match.Profile.Name, ips)
 			})
 		},
 	})
