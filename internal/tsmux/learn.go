@@ -232,6 +232,19 @@ func (c *Config) isSplitDNSName(profile, host string) bool {
 	})
 }
 
+// ipv4Routes is every IPv4 prefix RouteAddr places in a tailnet.
+func (c *Config) ipv4Routes() []netip.Prefix {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var out []netip.Prefix
+	for _, r := range c.ipRulesLocked() {
+		if r.pfx.Addr().Is4() {
+			out = append(out, r.pfx)
+		}
+	}
+	return out
+}
+
 // learnedDomains is every profile's split-DNS domains, no leading dot.
 func (c *Config) learnedDomains() []string {
 	c.mu.RLock()

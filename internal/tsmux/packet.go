@@ -33,8 +33,9 @@ var (
 	TunnelDNS  = netip.MustParseAddr("198.18.0.2")
 )
 
-// TunnelRoutes is what the packet tunnel claims: every tailnet's CGNAT range,
-// plus the DNS server. Addresses no running tailnet owns get a reset.
+// TunnelRoutes is what the packet tunnel always claims: every tailnet's CGNAT
+// range, plus the DNS server. TunnelSettings adds each tailnet's accepted
+// subnets. Addresses no running tailnet owns get a reset.
 var TunnelRoutes = []netip.Prefix{netip.MustParsePrefix("100.64.0.0/10"), netip.PrefixFrom(TunnelDNS, 32)}
 
 const tunMTU = 1280
@@ -70,8 +71,11 @@ func (m *Manager) TunnelSettings() TunnelSettings {
 	domains = append(domains, m.cfg.learnedDomains()...)
 	slices.Sort(domains)
 	var routes []TunnelRoute
-	for _, p := range TunnelRoutes {
-		routes = append(routes, TunnelRoute{p.Addr().String(), net.IP(net.CIDRMask(p.Bits(), 32)).String()})
+	for _, p := range append(slices.Clone(TunnelRoutes), m.cfg.ipv4Routes()...) {
+		r := TunnelRoute{p.Addr().String(), net.IP(net.CIDRMask(p.Bits(), 32)).String()}
+		if !slices.Contains(routes, r) {
+			routes = append(routes, r)
+		}
 	}
 	return TunnelSettings{TunnelAddr.String(), TunnelDNS.String(), slices.Compact(domains), routes}
 }
