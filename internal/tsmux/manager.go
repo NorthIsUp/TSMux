@@ -657,6 +657,10 @@ func (n *Node) queryTailnetDNS(ctx context.Context, host, qtype string) ([]netip
 	if err != nil {
 		return nil, err
 	}
+	return queryDNS(ctx, lc, host, qtype)
+}
+
+func queryDNS(ctx context.Context, lc *local.Client, host, qtype string) ([]netip.Addr, error) {
 	raw, _, err := lc.QueryDNS(ctx, host, qtype)
 	if err != nil {
 		return nil, err
@@ -682,9 +686,17 @@ func (n *Node) queryTailnetDNS(ctx context.Context, host, qtype string) ([]netip
 // whatever nameservers this machine is configured with, which answers only
 // because a system Tailscale put 100.100.100.100 there.
 func (n *Node) Resolve(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return resolveWith(ctx, host, n.queryTailnetDNS)
+}
+
+func resolveWith(
+	ctx context.Context,
+	host string,
+	query func(ctx context.Context, host, qtype string) ([]netip.Addr, error),
+) ([]net.IPAddr, error) {
 	var out []net.IPAddr
 	for _, qtype := range []string{"A", "AAAA"} {
-		addrs, err := n.queryTailnetDNS(ctx, host, qtype)
+		addrs, err := query(ctx, host, qtype)
 		if err != nil {
 			continue
 		}
