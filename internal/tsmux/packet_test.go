@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,24 @@ func TestTunnelSettings(t *testing.T) {
 	got := m.TunnelSettings()
 	if strings.Join(got.MatchDomains, ",") != "corp.example,tail1.ts.net" || got.Routes[0] != (TunnelRoute{"100.64.0.0", "255.192.0.0"}) {
 		t.Errorf("TunnelSettings = %+v", got)
+	}
+}
+
+// An accepted subnet route reaches the OS, so a tool that ignores proxies can
+// connect to what split DNS hands it. The tunnel carries IPv4 only.
+func TestTunnelSettingsClaimsSubnetRoutes(t *testing.T) {
+	cfg := tempConfig(t, twoProfiles)
+	cfg.setLearned("work", nil, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/16"), netip.MustParsePrefix("fd7a:1::/48")})
+	want := []TunnelRoute{
+		{"100.64.0.0", "255.192.0.0"},
+		{TunnelDNS.String(), "255.255.255.255"},
+		{"10.0.0.0", "255.255.0.0"},
+	}
+	if got := NewManager(cfg, false).TunnelSettings().Routes; !slices.Equal(got, want) {
+		t.Errorf("Routes = %+v, want %+v", got, want)
+	}
+	if p, err := cfg.RouteAddr(netip.MustParseAddr("10.0.15.7")); err != nil || p.Name != "work" {
+		t.Errorf("RouteAddr(10.0.15.7) = %v, %v; want work", p, err)
 	}
 }
 
